@@ -1,6 +1,8 @@
 """MCP tools for Zimbra email management."""
 
+import os
 import re
+from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -253,6 +255,77 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "subject": subject,
             "body_preview": body[:200] + "..." if len(body) > 200 else body,
         }
+
+    @mcp.tool()
+    def download_attachment(
+        msg_id: str,
+        part_id: str,
+        save_path: str,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Download an email attachment and save it to a file.
+
+        Args:
+            msg_id: Email ID (obtained via search_emails or get_email)
+            part_id: Attachment part ID (obtained from get_email attachments list)
+            save_path: Directory where to save the file (must exist)
+            filename: Optional custom filename (if not provided, uses original filename)
+
+        Returns:
+            Information about the downloaded file (path, size, content_type)
+        """
+        # Validate save_path
+        save_dir = Path(save_path).expanduser().resolve()
+        if not save_dir.exists():
+            return {
+                "success": False,
+                "error": f"Directory does not exist: {save_path}",
+            }
+        if not save_dir.is_dir():
+            return {
+                "success": False,
+                "error": f"Path is not a directory: {save_path}",
+            }
+
+        # Download attachment content
+        content, original_filename, content_type = client.get_attachment_content(msg_id, part_id)
+
+        # Determine final filename
+        final_filename = filename or original_filename
+        if not final_filename or final_filename == "attachment":
+            # Fallback: use part_id and guess extension from content_type
+            ext = _guess_extension(content_type)
+            final_filename = f"attachment_{msg_id}_{part_id.replace('.', '_')}{ext}"
+
+        # Write file
+        file_path = save_dir / final_filename
+        file_path.write_bytes(content)
+
+        return {
+            "success": True,
+            "filename": final_filename,
+            "path": str(file_path),
+            "size": len(content),
+            "content_type": content_type,
+        }
+
+
+def _guess_extension(content_type: str) -> str:
+    """Guess file extension from content type."""
+    extensions = {
+        "application/pdf": ".pdf",
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/gif": ".gif",
+        "text/plain": ".txt",
+        "text/html": ".html",
+        "application/zip": ".zip",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "application/msword": ".doc",
+        "application/vnd.ms-excel": ".xls",
+    }
+    return extensions.get(content_type.split(";")[0].strip(), "")
 
 
 def _extract_address(addresses: list[dict], addr_type: str) -> str | None:

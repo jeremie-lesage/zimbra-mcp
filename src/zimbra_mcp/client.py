@@ -387,3 +387,55 @@ class ZimbraClient:
             "uid": email,
         }
         return self.request("GetFreeBusyRequest", "urn:zimbraMail", params)
+
+    def get_attachment_content(self, msg_id: str, part_id: str) -> tuple[bytes, str, str]:
+        """Retrieve attachment content via REST API.
+
+        Args:
+            msg_id: Message ID
+            part_id: Part ID of the attachment
+
+        Returns:
+            Tuple of (content_bytes, filename, content_type)
+        """
+        import base64
+        import urllib.request
+        import urllib.error
+        from urllib.parse import urlencode
+
+        self._ensure_connected()
+
+        # Build REST URL for attachment download
+        # Format: /service/home/~/?id=<msg_id>&part=<part_id>&auth=qp&zauthtoken=<token>
+        base_url = self.config.url.replace("/service/soap", "")
+        params = urlencode({
+            "id": msg_id,
+            "part": part_id,
+            "auth": "qp",
+            "zauthtoken": self._token,
+        })
+        url = f"{base_url}/service/home/~/?{params}"
+
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=self.config.timeout) as response:
+                content = response.read()
+                content_type = response.headers.get("Content-Type", "application/octet-stream")
+
+                # Extract filename from Content-Disposition header
+                content_disp = response.headers.get("Content-Disposition", "")
+                filename = "attachment"
+                if "filename=" in content_disp:
+                    import re
+                    match = re.search(r'filename[*]?=["\']?([^"\';\n]+)', content_disp)
+                    if match:
+                        filename = match.group(1).strip()
+
+                return content, filename, content_type
+
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise ZimbraNotFoundError(f"Attachment not found: msg_id={msg_id}, part_id={part_id}")
+            raise ZimbraOperationError(f"Failed to download attachment: {e}")
+        except Exception as e:
+            raise ZimbraOperationError(f"Failed to download attachment: {e}")

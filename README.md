@@ -53,6 +53,7 @@ mcp dev src/zimbra_mcp/server.py
 |------|-------------|
 | `search_emails` | Search with Zimbra syntax (in:inbox, from:, tag:, etc.) |
 | `get_email` | Retrieve an email by ID with full body |
+| `download_attachment` | Download an attachment to a local file |
 | `list_folders` | List all mail folders |
 | `move_emails` | Move emails to a folder |
 | `create_draft` | Create a draft (without sending) |
