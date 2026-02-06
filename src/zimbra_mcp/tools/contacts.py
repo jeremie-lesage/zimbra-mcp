@@ -35,12 +35,16 @@ def _build_contact_attrs(**kwargs: str | None) -> list[dict[str, str]]:
     return attrs
 
 
-def _parse_contact(cn: dict) -> dict[str, Any]:
+def _parse_contact(cn: dict, folder_lookup: dict[str, str] | None = None) -> dict[str, Any]:
     """Parse a Zimbra contact response into a readable dict."""
+    folder_id = cn.get("l")
     contact: dict[str, Any] = {
         "id": cn.get("id"),
-        "folder": cn.get("l"),
+        "folder": folder_id,
     }
+
+    if folder_lookup and folder_id:
+        contact["folder_path"] = folder_lookup.get(folder_id, folder_id)
 
     # pythonzimbra returns attributes as a flat dict in "_attrs"
     attrs = cn.get("_attrs", {})
@@ -53,6 +57,30 @@ def _parse_contact(cn: dict) -> dict[str, Any]:
     return contact
 
 
+def _build_folder_lookup(client: ZimbraClient) -> dict[str, str]:
+    """Build a folder ID to path lookup from the folder tree."""
+    result = client.get_folder("/")
+    lookup: dict[str, str] = {}
+
+    def _walk(folder: dict, path: str = "") -> None:
+        name = folder.get("name", "")
+        folder_path = f"{path}/{name}" if path else name
+        fid = folder.get("id")
+        if fid:
+            lookup[str(fid)] = folder_path
+        for sub in (folder.get("folder", []) if isinstance(folder.get("folder", []), list) else [folder["folder"]]):
+            _walk(sub, folder_path)
+
+    folder_data = result.get("folder", {})
+    if isinstance(folder_data, list):
+        for f in folder_data:
+            _walk(f)
+    else:
+        _walk(folder_data)
+
+    return lookup
+
+
 def register_contact_tools(mcp: FastMCP, client: ZimbraClient) -> None:
     """Register contact management tools.
 
@@ -60,6 +88,12 @@ def register_contact_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         mcp: FastMCP instance
         client: Zimbra client
     """
+    _folder_cache: dict[str, str] = {}
+
+    def _get_folder_lookup() -> dict[str, str]:
+        if not _folder_cache:
+            _folder_cache.update(_build_folder_lookup(client))
+        return _folder_cache
 
     @mcp.tool()
     def search_contacts(
@@ -84,7 +118,8 @@ def register_contact_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         if not isinstance(contacts_raw, list):
             contacts_raw = [contacts_raw] if contacts_raw else []
 
-        contacts = [_parse_contact(cn) for cn in contacts_raw]
+        folder_lookup = _get_folder_lookup()
+        contacts = [_parse_contact(cn, folder_lookup) for cn in contacts_raw]
 
         return {
             "contacts": contacts,
@@ -109,7 +144,7 @@ def register_contact_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         if isinstance(cn, list):
             cn = cn[0] if cn else {}
 
-        return _parse_contact(cn)
+        return _parse_contact(cn, _get_folder_lookup())
 
     @mcp.tool()
     def create_contact(
@@ -165,7 +200,7 @@ def register_contact_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         if isinstance(cn, list):
             cn = cn[0] if cn else {}
 
-        contact = _parse_contact(cn)
+        contact = _parse_contact(cn, _get_folder_lookup())
         return {
             "success": True,
             "contact": contact,
@@ -227,7 +262,7 @@ def register_contact_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         if isinstance(cn, list):
             cn = cn[0] if cn else {}
 
-        contact = _parse_contact(cn)
+        contact = _parse_contact(cn, _get_folder_lookup())
         return {
             "success": True,
             "contact": contact,
