@@ -216,7 +216,8 @@ class ZimbraClient:
         Returns:
             Information about the created draft
         """
-        addresses = [{"t": "t", "a": addr} for addr in to]
+        addresses = [{"t": "f", "a": self.config.user}]
+        addresses.extend([{"t": "t", "a": addr} for addr in to])
         if cc:
             addresses.extend([{"t": "c", "a": addr} for addr in cc])
         if bcc:
