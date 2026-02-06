@@ -221,6 +221,24 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         }
 
     @mcp.tool()
+    def mark_as_read(msg_ids: list[str], read: bool = True) -> dict[str, Any]:
+        """Mark emails as read or unread.
+
+        Args:
+            msg_ids: List of email IDs
+            read: True to mark as read (default), False for unread
+
+        Returns:
+            Operation confirmation
+        """
+        client.mark_as_read(msg_ids, read=read)
+        return {
+            "success": True,
+            "marked_count": len(msg_ids),
+            "status": "read" if read else "unread",
+        }
+
+    @mcp.tool()
     def create_draft(
         to: list[str],
         subject: str,

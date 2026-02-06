@@ -177,6 +177,25 @@ class ZimbraClient:
         }
         return self.request("MsgActionRequest", "urn:zimbraMail", params)
 
+    def mark_as_read(self, msg_ids: list[str], read: bool = True) -> dict[str, Any]:
+        """Mark messages as read or unread.
+
+        Args:
+            msg_ids: List of message IDs
+            read: True to mark as read, False for unread
+
+        Returns:
+            Operation result
+        """
+        op = "read" if read else "!read"
+        params = {
+            "action": {
+                "id": ",".join(msg_ids),
+                "op": op,
+            }
+        }
+        return self.request("MsgActionRequest", "urn:zimbraMail", params)
+
     def create_draft(
         self,
         to: list[str],
