@@ -10,6 +10,7 @@ from zimbra_mcp.client import ZimbraClient
 from zimbra_mcp.config import ZimbraConfig
 from zimbra_mcp.tools import (
     register_calendar_tools,
+    register_contact_tools,
     register_email_tools,
     register_tag_tools,
 )
@@ -35,7 +36,8 @@ async def lifespan(mcp: FastMCP) -> AsyncIterator[dict]:
         register_email_tools(mcp, client)
         register_tag_tools(mcp, client)
         register_calendar_tools(mcp, client)
-        logger.info("Tools registered: emails, tags, calendar")
+        register_contact_tools(mcp, client)
+        logger.info("Tools registered: emails, tags, calendar, contacts")
 
         yield {"client": client}
 
@@ -50,7 +52,7 @@ async def lifespan(mcp: FastMCP) -> AsyncIterator[dict]:
 
 mcp = FastMCP(
     "zimbra-mcp",
-    instructions="MCP Server for Zimbra - Email, tag, and calendar management",
+    instructions="MCP Server for Zimbra - Email, tag, calendar, and contact management",
     lifespan=lifespan,
 )
 

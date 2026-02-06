@@ -408,6 +408,97 @@ class ZimbraClient:
         }
         return self.request("GetFreeBusyRequest", "urn:zimbraMail", params)
 
+    def search_contacts(
+        self,
+        query: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Search for contacts.
+
+        Args:
+            query: Zimbra search query
+            limit: Maximum number of results
+            offset: Offset for pagination
+
+        Returns:
+            Search results
+        """
+        params = {
+            "query": query,
+            "limit": limit,
+            "offset": offset,
+            "types": "contact",
+            "fetch": "all",
+        }
+        return self.request("SearchRequest", "urn:zimbraMail", params)
+
+    def get_contact(self, contact_id: str) -> dict[str, Any]:
+        """Retrieve a contact by its ID.
+
+        Args:
+            contact_id: Contact ID
+
+        Returns:
+            Contact details
+        """
+        params = {
+            "cn": {"id": contact_id},
+        }
+        return self.request("GetContactsRequest", "urn:zimbraMail", params)
+
+    def create_contact(self, folder_id: str | None, attributes: list[dict[str, str]]) -> dict[str, Any]:
+        """Create a contact.
+
+        Args:
+            folder_id: Folder ID (None for default Contacts folder)
+            attributes: List of {"n": name, "_content": value} dicts
+
+        Returns:
+            Information about the created contact
+        """
+        cn: dict[str, Any] = {"a": attributes}
+        if folder_id:
+            cn["l"] = folder_id
+
+        params = {"cn": cn}
+        return self.request("CreateContactRequest", "urn:zimbraMail", params)
+
+    def modify_contact(self, contact_id: str, attributes: list[dict[str, str]]) -> dict[str, Any]:
+        """Modify a contact.
+
+        Args:
+            contact_id: Contact ID
+            attributes: List of {"n": name, "_content": value} dicts
+
+        Returns:
+            Updated contact information
+        """
+        params = {
+            "cn": {
+                "id": contact_id,
+                "a": attributes,
+            },
+        }
+        return self.request("ModifyContactRequest", "urn:zimbraMail", params)
+
+    def delete_contacts(self, contact_ids: list[str]) -> dict[str, Any]:
+        """Delete contacts.
+
+        Args:
+            contact_ids: List of contact IDs
+
+        Returns:
+            Operation result
+        """
+        params = {
+            "action": {
+                "id": ",".join(contact_ids),
+                "op": "delete",
+            }
+        }
+        return self.request("ContactActionRequest", "urn:zimbraMail", params)
+
     def get_attachment_content(self, msg_id: str, part_id: str) -> tuple[bytes, str, str]:
         """Retrieve attachment content via REST API.
 
