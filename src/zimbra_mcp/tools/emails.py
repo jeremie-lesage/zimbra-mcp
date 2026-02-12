@@ -201,6 +201,41 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         return {"folders": folders}
 
     @mcp.tool()
+    def search_folder(name: str) -> dict[str, Any]:
+        """Search for a folder by name or path.
+
+        Performs case-insensitive partial matching on both folder name and path.
+        Use this instead of list_folders when you know the folder name you're looking for.
+
+        Args:
+            name: Search term to match against folder name or path
+
+        Returns:
+            Matching folders with their IDs, paths, and counters
+        """
+        result = client.get_folder("/")
+
+        all_folders: list[dict] = []
+        folder_data = result.get("folder", {})
+        if isinstance(folder_data, list):
+            for f in folder_data:
+                _flatten_folders(f, all_folders)
+        else:
+            _flatten_folders(folder_data, all_folders)
+
+        query_lower = name.lower()
+        matches = [
+            f for f in all_folders
+            if query_lower in f["name"].lower() or query_lower in f["path"].lower()
+        ]
+
+        return {
+            "folders": matches,
+            "query": name,
+            "total": len(matches),
+        }
+
+    @mcp.tool()
     def move_emails(msg_ids: list[str], folder_id: str) -> dict[str, Any]:
         """Move emails to a folder.
 

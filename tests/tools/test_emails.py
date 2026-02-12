@@ -171,6 +171,71 @@ class TestDeleteEmailsTool:
         assert result["hard_delete"] is True
 
 
+class TestSearchFolderTool:
+    def _mock_folder_tree(self):
+        return {
+            "folder": {
+                "id": "1",
+                "name": "USER_ROOT",
+                "folder": [
+                    {"id": "2", "name": "Inbox", "u": 3, "n": 50},
+                    {"id": "3", "name": "Sent"},
+                    {"id": "4", "name": "Drafts"},
+                    {
+                        "id": "5",
+                        "name": "Work",
+                        "folder": [
+                            {"id": "6", "name": "Projects"},
+                            {"id": "7", "name": "Inbox-Archive"},
+                        ],
+                    },
+                ],
+            }
+        }
+
+    def test_search_by_name(self, email_tools):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_folder_tree())
+
+        result = tools["search_folder"]("inbox")
+        names = [f["name"] for f in result["folders"]]
+        assert "Inbox" in names
+        assert "Inbox-Archive" in names
+        assert result["total"] == 2
+
+    def test_search_case_insensitive(self, email_tools):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_folder_tree())
+
+        result = tools["search_folder"]("DRAFTS")
+        assert result["total"] == 1
+        assert result["folders"][0]["name"] == "Drafts"
+
+    def test_search_by_path(self, email_tools):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_folder_tree())
+
+        result = tools["search_folder"]("Work/Projects")
+        assert result["total"] >= 1
+        paths = [f["path"] for f in result["folders"]]
+        assert any("Work/Projects" in p for p in paths)
+
+    def test_search_no_match(self, email_tools):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_folder_tree())
+
+        result = tools["search_folder"]("nonexistent")
+        assert result["total"] == 0
+        assert result["folders"] == []
+
+    def test_query_preserved(self, email_tools):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_folder_tree())
+
+        result = tools["search_folder"]("test")
+        assert result["query"] == "test"
+
+
 class TestSearchEmailsTool:
     def test_basic_search(self, email_tools):
         tools, client = email_tools
