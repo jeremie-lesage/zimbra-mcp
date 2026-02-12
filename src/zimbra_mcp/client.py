@@ -266,6 +266,61 @@ class ZimbraClient:
             params["m"]["attach"] = {"m": {"id": attach_msg_id}}
         return self.request("SaveDraftRequest", "urn:zimbraMail", params)
 
+    def send_message(
+        self,
+        to: list[str],
+        subject: str,
+        body: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        orig_msg_id: str | None = None,
+        reply_type: str | None = None,
+        attach_msg_id: str | None = None,
+        draft_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Send an email message.
+
+        Args:
+            to: Recipients
+            subject: Subject
+            body: Message body
+            cc: CC recipients
+            bcc: BCC recipients
+            orig_msg_id: Original message ID (for reply/forward)
+            reply_type: "r" for reply, "w" for forward
+            attach_msg_id: Message ID to attach as .eml (RFC 822)
+            draft_id: Draft ID to send (marks draft as sent)
+
+        Returns:
+            Information about the sent message
+        """
+        addresses = [{"t": "f", "a": self.config.user}]
+        addresses.extend([{"t": "t", "a": addr} for addr in to])
+        if cc:
+            addresses.extend([{"t": "c", "a": addr} for addr in cc])
+        if bcc:
+            addresses.extend([{"t": "b", "a": addr} for addr in bcc])
+
+        params = {
+            "m": {
+                "e": addresses,
+                "su": subject,
+                "mp": {
+                    "ct": "text/plain",
+                    "content": body,
+                },
+            }
+        }
+        if orig_msg_id:
+            params["m"]["origid"] = orig_msg_id
+        if reply_type:
+            params["m"]["rt"] = reply_type
+        if attach_msg_id:
+            params["m"]["attach"] = {"m": {"id": attach_msg_id}}
+        if draft_id:
+            params["m"]["did"] = draft_id
+        return self.request("SendMsgRequest", "urn:zimbraMail", params)
+
     def get_all_tags(self) -> dict[str, Any]:
         """Retrieve all tags."""
         return self.request("GetTagRequest", "urn:zimbraMail")

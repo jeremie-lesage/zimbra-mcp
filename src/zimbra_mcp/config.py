@@ -14,6 +14,7 @@ class ZimbraConfig:
     user: str
     password: str
     timeout: int = 30
+    enable_send: bool = False
 
     @classmethod
     def from_env(cls) -> "ZimbraConfig":
@@ -24,6 +25,7 @@ class ZimbraConfig:
         user = os.getenv("ZIMBRA_USER")
         password = os.getenv("ZIMBRA_PASSWORD")
         timeout = int(os.getenv("ZIMBRA_TIMEOUT", "30"))
+        enable_send = os.getenv("ZIMBRA_ENABLE_SEND", "").lower() in ("true", "1", "yes")
 
         if not url:
             raise ValueError("ZIMBRA_URL not defined")
@@ -32,4 +34,4 @@ class ZimbraConfig:
         if not password:
             raise ValueError("ZIMBRA_PASSWORD not defined")
 
-        return cls(url=url, user=user, password=password, timeout=timeout)
+        return cls(url=url, user=user, password=password, timeout=timeout, enable_send=enable_send)

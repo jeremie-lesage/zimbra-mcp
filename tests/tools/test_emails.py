@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.conftest import capture_tools
+from zimbra_mcp.config import ZimbraConfig
 from zimbra_mcp.tools.emails import (
     _convert_iso_dates,
     _extract_address,
@@ -13,6 +14,7 @@ from zimbra_mcp.tools.emails import (
     _flatten_folders,
     _guess_extension,
     _html_to_text,
+    _prepare_body_with_original,
     register_email_tools,
 )
 
@@ -284,3 +286,85 @@ class TestMarkAsReadTool:
 
         result = tools["mark_as_read"](["1"], read=False)
         assert result["status"] == "unread"
+
+
+class TestPrepareBodyWithOriginal:
+    def test_no_include(self, connected_client):
+        body, attach = _prepare_body_with_original(
+            connected_client, "Hello", "123", "r", None,
+        )
+        assert body == "Hello"
+        assert attach is None
+
+    def test_attachment_mode(self, connected_client):
+        body, attach = _prepare_body_with_original(
+            connected_client, "See attached", "123", "w", "attachment",
+        )
+        assert body == "See attached"
+        assert attach == "123"
+
+    def test_inline_reply(self, connected_client):
+        connected_client.get_message = MagicMock(return_value={
+            "m": {
+                "e": [{"t": "f", "a": "sender@test.com"}],
+                "d": "1700000000000",
+                "mp": [{"ct": "text/plain", "content": "Original text"}],
+            }
+        })
+
+        body, attach = _prepare_body_with_original(
+            connected_client, "My reply", "123", "r", "inline",
+        )
+        assert "My reply" in body
+        assert "> Original text" in body
+        assert attach is None
+
+    def test_inline_forward(self, connected_client):
+        connected_client.get_message = MagicMock(return_value={
+            "m": {
+                "e": [
+                    {"t": "f", "a": "sender@test.com"},
+                    {"t": "t", "a": "recipient@test.com"},
+                ],
+                "d": "1700000000000",
+                "su": "Original Subject",
+                "mp": [{"ct": "text/plain", "content": "Original text"}],
+            }
+        })
+
+        body, attach = _prepare_body_with_original(
+            connected_client, "FYI", "123", "w", "inline",
+        )
+        assert "FYI" in body
+        assert "Forwarded message" in body
+        assert "Original text" in body
+        assert attach is None
+
+
+class TestSendEmailToolRegistration:
+    def test_send_email_not_registered_by_default(self, connected_client):
+        tools = capture_tools(register_email_tools, connected_client)
+        assert "send_email" not in tools
+
+    def test_send_email_not_registered_when_disabled(self, connected_client):
+        cfg = ZimbraConfig(url="https://z.test", user="u", password="p", enable_send=False)
+        tools = capture_tools(register_email_tools, connected_client, cfg)
+        assert "send_email" not in tools
+
+    def test_send_email_registered_when_enabled(self, connected_client):
+        cfg = ZimbraConfig(url="https://z.test", user="u", password="p", enable_send=True)
+        tools = capture_tools(register_email_tools, connected_client, cfg)
+        assert "send_email" in tools
+
+    def test_send_email_calls_client(self, connected_client):
+        cfg = ZimbraConfig(url="https://z.test", user="u", password="p", enable_send=True)
+        tools = capture_tools(register_email_tools, connected_client, cfg)
+        connected_client.send_message = MagicMock(return_value={"m": {"id": "200"}})
+
+        result = tools["send_email"](
+            to=["bob@test.com"], subject="Test", body="Hello",
+        )
+
+        connected_client.send_message.assert_called_once()
+        assert result["success"] is True
+        assert result["message_id"] == "200"

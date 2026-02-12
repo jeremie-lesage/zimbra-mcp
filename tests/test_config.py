@@ -62,3 +62,44 @@ class TestZimbraConfig:
     def test_direct_construction(self):
         cfg = ZimbraConfig(url="https://z.test", user="u", password="p")
         assert cfg.timeout == 30
+        assert cfg.enable_send is False
+
+    @patch("zimbra_mcp.config.load_dotenv")
+    def test_enable_send_true(self, _mock_dotenv, monkeypatch):
+        monkeypatch.setenv("ZIMBRA_URL", "https://z.test/service/soap")
+        monkeypatch.setenv("ZIMBRA_USER", "u@test.com")
+        monkeypatch.setenv("ZIMBRA_PASSWORD", "pw")
+        monkeypatch.setenv("ZIMBRA_ENABLE_SEND", "true")
+
+        cfg = ZimbraConfig.from_env()
+        assert cfg.enable_send is True
+
+    @patch("zimbra_mcp.config.load_dotenv")
+    def test_enable_send_yes(self, _mock_dotenv, monkeypatch):
+        monkeypatch.setenv("ZIMBRA_URL", "https://z.test/service/soap")
+        monkeypatch.setenv("ZIMBRA_USER", "u@test.com")
+        monkeypatch.setenv("ZIMBRA_PASSWORD", "pw")
+        monkeypatch.setenv("ZIMBRA_ENABLE_SEND", "yes")
+
+        cfg = ZimbraConfig.from_env()
+        assert cfg.enable_send is True
+
+    @patch("zimbra_mcp.config.load_dotenv")
+    def test_enable_send_1(self, _mock_dotenv, monkeypatch):
+        monkeypatch.setenv("ZIMBRA_URL", "https://z.test/service/soap")
+        monkeypatch.setenv("ZIMBRA_USER", "u@test.com")
+        monkeypatch.setenv("ZIMBRA_PASSWORD", "pw")
+        monkeypatch.setenv("ZIMBRA_ENABLE_SEND", "1")
+
+        cfg = ZimbraConfig.from_env()
+        assert cfg.enable_send is True
+
+    @patch("zimbra_mcp.config.load_dotenv")
+    def test_enable_send_default_false(self, _mock_dotenv, monkeypatch):
+        monkeypatch.setenv("ZIMBRA_URL", "https://z.test/service/soap")
+        monkeypatch.setenv("ZIMBRA_USER", "u@test.com")
+        monkeypatch.setenv("ZIMBRA_PASSWORD", "pw")
+        monkeypatch.delenv("ZIMBRA_ENABLE_SEND", raising=False)
+
+        cfg = ZimbraConfig.from_env()
+        assert cfg.enable_send is False

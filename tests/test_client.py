@@ -128,3 +128,44 @@ class TestDeleteMessages:
         call_args = connected_client._comm.gen_request.return_value.add_request.call_args
         params = call_args[0][1]
         assert params["action"]["op"] == "delete"
+
+
+class TestSendMessage:
+    def test_send_basic(self, connected_client):
+        mock_response = MagicMock()
+        mock_response.is_fault.return_value = False
+        mock_response.get_response.return_value = {
+            "SendMsgResponse": {"m": {"id": "100"}}
+        }
+
+        connected_client._comm.gen_request.return_value = MagicMock()
+        connected_client._comm.send_request.return_value = mock_response
+
+        result = connected_client.send_message(
+            to=["bob@test.com"], subject="Hi", body="Hello",
+        )
+
+        call_args = connected_client._comm.gen_request.return_value.add_request.call_args
+        assert call_args[0][0] == "SendMsgRequest"
+        assert call_args[0][2] == "urn:zimbraMail"
+        params = call_args[0][1]
+        assert params["m"]["su"] == "Hi"
+        assert params["m"]["mp"]["content"] == "Hello"
+
+    def test_send_with_draft_id(self, connected_client):
+        mock_response = MagicMock()
+        mock_response.is_fault.return_value = False
+        mock_response.get_response.return_value = {
+            "SendMsgResponse": {"m": {"id": "101"}}
+        }
+
+        connected_client._comm.gen_request.return_value = MagicMock()
+        connected_client._comm.send_request.return_value = mock_response
+
+        result = connected_client.send_message(
+            to=["bob@test.com"], subject="Hi", body="Hello", draft_id="50",
+        )
+
+        call_args = connected_client._comm.gen_request.return_value.add_request.call_args
+        params = call_args[0][1]
+        assert params["m"]["did"] == "50"

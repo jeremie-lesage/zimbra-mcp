@@ -1,5 +1,7 @@
 """MCP tools for Zimbra email management."""
 
+from __future__ import annotations
+
 import os
 import re
 from pathlib import Path
@@ -9,6 +11,7 @@ from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
 
 from zimbra_mcp.client import ZimbraClient
+from zimbra_mcp.config import ZimbraConfig
 
 
 def _convert_iso_dates(query: str) -> str:
@@ -56,12 +59,92 @@ def _html_to_text(html: str) -> str:
     return text
 
 
-def register_email_tools(mcp: FastMCP, client: ZimbraClient) -> None:
+def _prepare_body_with_original(
+    client: ZimbraClient,
+    body: str,
+    orig_msg_id: str,
+    reply_type: str | None,
+    include_original: str | None,
+) -> tuple[str, str | None]:
+    """Prepare body with original message included.
+
+    Returns:
+        Tuple of (full_body, attach_msg_id)
+    """
+    if not include_original:
+        return body, None
+
+    if include_original == "attachment":
+        return body, orig_msg_id
+
+    if include_original != "inline":
+        return body, None
+
+    orig_result = client.get_message(orig_msg_id)
+    orig_msg = orig_result.get("m", {})
+    if isinstance(orig_msg, list):
+        orig_msg = orig_msg[0] if orig_msg else {}
+
+    orig_parts: list[dict] = []
+    _extract_parts(orig_msg.get("mp", []), orig_parts, [])
+    orig_text = ""
+    for part in orig_parts:
+        if part.get("content_type") == "text/plain":
+            orig_text = part.get("content", "")
+            break
+    if not orig_text:
+        for part in orig_parts:
+            if part.get("content_type", "").startswith("text/html"):
+                orig_text = _html_to_text(part.get("content", ""))
+                break
+
+    if not orig_text:
+        return body, None
+
+    orig_from = _extract_address(orig_msg.get("e", []), "f") or ""
+    orig_date = orig_msg.get("d", "")
+    if orig_date:
+        from datetime import datetime, timezone
+        try:
+            dt = datetime.fromtimestamp(
+                int(orig_date) / 1000, tz=timezone.utc,
+            )
+            orig_date = dt.strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            pass
+
+    if reply_type == "w":
+        orig_to = _extract_addresses(orig_msg.get("e", []), "t")
+        orig_subject = orig_msg.get("su", "")
+        full_body = (
+            f"{body}\n\n"
+            f"---------- Forwarded message ---------\n"
+            f"From: {orig_from}\n"
+            f"Date: {orig_date}\n"
+            f"Subject: {orig_subject}\n"
+            f"To: {', '.join(orig_to)}\n\n"
+            f"{orig_text}"
+        )
+    else:
+        quoted = "\n".join(
+            f"> {line}" for line in orig_text.splitlines()
+        )
+        full_body = (
+            f"{body}\n\n"
+            f"On {orig_date}, {orig_from} wrote:\n"
+            f"{quoted}"
+        )
+
+    return full_body, None
+
+
+def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfig | None = None) -> None:
     """Register email management tools.
 
     Args:
         mcp: FastMCP instance
         client: Zimbra client
+        config: Optional config (used to gate send_email)
     """
 
     @mcp.tool()
@@ -331,62 +414,10 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         full_body = body
         attach_msg_id = None
 
-        if include_original and orig_msg_id:
-            if include_original == "attachment":
-                attach_msg_id = orig_msg_id
-            elif include_original == "inline":
-                orig_result = client.get_message(orig_msg_id)
-                orig_msg = orig_result.get("m", {})
-                if isinstance(orig_msg, list):
-                    orig_msg = orig_msg[0] if orig_msg else {}
-
-                orig_parts: list[dict] = []
-                _extract_parts(orig_msg.get("mp", []), orig_parts, [])
-                orig_text = ""
-                for part in orig_parts:
-                    if part.get("content_type") == "text/plain":
-                        orig_text = part.get("content", "")
-                        break
-                if not orig_text:
-                    for part in orig_parts:
-                        if part.get("content_type", "").startswith("text/html"):
-                            orig_text = _html_to_text(part.get("content", ""))
-                            break
-
-                if orig_text:
-                    orig_from = _extract_address(orig_msg.get("e", []), "f") or ""
-                    orig_date = orig_msg.get("d", "")
-                    if orig_date:
-                        from datetime import datetime, timezone
-                        try:
-                            dt = datetime.fromtimestamp(
-                                int(orig_date) / 1000, tz=timezone.utc,
-                            )
-                            orig_date = dt.strftime("%Y-%m-%d %H:%M")
-                        except (ValueError, TypeError):
-                            pass
-
-                    if reply_type == "w":
-                        orig_to = _extract_addresses(orig_msg.get("e", []), "t")
-                        orig_subject = orig_msg.get("su", "")
-                        full_body = (
-                            f"{body}\n\n"
-                            f"---------- Forwarded message ---------\n"
-                            f"From: {orig_from}\n"
-                            f"Date: {orig_date}\n"
-                            f"Subject: {orig_subject}\n"
-                            f"To: {', '.join(orig_to)}\n\n"
-                            f"{orig_text}"
-                        )
-                    else:
-                        quoted = "\n".join(
-                            f"> {line}" for line in orig_text.splitlines()
-                        )
-                        full_body = (
-                            f"{body}\n\n"
-                            f"On {orig_date}, {orig_from} wrote:\n"
-                            f"{quoted}"
-                        )
+        if orig_msg_id and include_original:
+            full_body, attach_msg_id = _prepare_body_with_original(
+                client, body, orig_msg_id, reply_type, include_original,
+            )
 
         result = client.create_draft(
             to, subject, full_body, cc=cc, bcc=bcc,
@@ -465,6 +496,68 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "size": len(content),
             "content_type": content_type,
         }
+
+    # Conditionally register send_email tool
+    if config and config.enable_send:
+        @mcp.tool()
+        def send_email(
+            to: list[str],
+            subject: str,
+            body: str,
+            cc: list[str] | None = None,
+            bcc: list[str] | None = None,
+            orig_msg_id: str | None = None,
+            reply_type: str | None = None,
+            include_original: str | None = None,
+            draft_id: str | None = None,
+        ) -> dict[str, Any]:
+            """Send an email directly. WARNING: sends immediately, cannot be undone.
+
+            Use orig_msg_id + reply_type to send a reply or forward linked
+            to the original message. Use include_original to include the original
+            message content ("inline" or "attachment").
+
+            Args:
+                to: List of primary recipients
+                subject: Email subject
+                body: Message body (plain text)
+                cc: List of CC recipients (optional)
+                bcc: List of BCC recipients (optional)
+                orig_msg_id: ID of the original message when replying or forwarding (optional)
+                reply_type: "r" for reply, "w" for forward. Required when orig_msg_id is set (optional)
+                include_original: How to include the original message: "inline" or "attachment" (optional)
+                draft_id: ID of an existing draft to send (optional)
+
+            Returns:
+                Information about the sent email
+            """
+            full_body = body
+            attach_msg_id = None
+
+            if orig_msg_id and include_original:
+                full_body, attach_msg_id = _prepare_body_with_original(
+                    client, body, orig_msg_id, reply_type, include_original,
+                )
+
+            result = client.send_message(
+                to, subject, full_body, cc=cc, bcc=bcc,
+                orig_msg_id=orig_msg_id, reply_type=reply_type,
+                attach_msg_id=attach_msg_id, draft_id=draft_id,
+            )
+
+            msg = result.get("m", {})
+            if isinstance(msg, list):
+                msg = msg[0] if msg else {}
+
+            return {
+                "success": True,
+                "message_id": msg.get("id"),
+                "to": to,
+                "cc": cc,
+                "bcc": bcc,
+                "subject": subject,
+                "body_preview": full_body[:200] + "..." if len(full_body) > 200 else full_body,
+            }
 
 
 def _guess_extension(content_type: str) -> str:

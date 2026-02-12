@@ -33,7 +33,7 @@ async def lifespan(mcp: FastMCP) -> AsyncIterator[dict]:
         client.connect()
         logger.info(f"Connected to Zimbra: {config.url} as {config.user}")
 
-        register_email_tools(mcp, client)
+        register_email_tools(mcp, client, config)
         register_tag_tools(mcp, client)
         register_calendar_tools(mcp, client)
         register_contact_tools(mcp, client)
