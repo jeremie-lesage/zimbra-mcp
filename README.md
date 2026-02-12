@@ -93,6 +93,16 @@ Examples:
 
 **Combinations:** `in:inbox from:boss tag:urgent is:unread`
 
+### Contacts
+
+| Tool | Description |
+|------|-------------|
+| `search_contacts` | Search contacts (all fields). Use `"*"` or empty for all |
+| `get_contact` | Retrieve a contact by ID |
+| `create_contact` | Create a contact (name, email, phone, company, etc.) |
+| `update_contact` | Update specific fields of an existing contact |
+| `delete_contact` | Delete one or more contacts |
+
 ### Tags
 
 | Tool | Description |
@@ -152,6 +162,7 @@ zimbra-mcp/
             ├── __init__.py
             ├── emails.py      # Email tools
             ├── tags.py        # Tag tools
+            ├── contacts.py    # Contact tools
             └── calendar.py    # Calendar tools
 ```
 
