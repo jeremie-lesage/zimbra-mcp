@@ -361,11 +361,12 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         """Delete emails.
 
         By default, emails are moved to Trash (soft delete).
-        Use hard_delete=True to permanently delete them (cannot be undone).
+        IMPORTANT: Only set hard_delete=True if the user explicitly asks for
+        permanent deletion. Never use hard_delete on your own initiative.
 
         Args:
             msg_ids: List of email IDs to delete
-            hard_delete: If True, permanently delete; otherwise move to Trash (default: False)
+            hard_delete: If True, permanently delete (ONLY when explicitly requested by user); otherwise move to Trash (default: False)
 
         Returns:
             Deletion confirmation
@@ -394,9 +395,9 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         to the original message. This sets the conversation thread and flags
         the original message as replied/forwarded in Zimbra.
 
-        Use include_original to include the original message content:
-        - "inline": quotes the original message body in the draft text
-        - "attachment": attaches the original message as a .eml file
+        When orig_msg_id is set, include_original defaults to "inline" (quotes
+        the original message in the body). Use "attachment" to attach it as .eml
+        instead, or "none" to explicitly exclude it.
 
         Args:
             to: List of primary recipients
@@ -406,7 +407,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
             bcc: List of BCC recipients (optional)
             orig_msg_id: ID of the original message when replying or forwarding (optional)
             reply_type: "r" for reply, "w" for forward. Required when orig_msg_id is set (optional)
-            include_original: How to include the original message: "inline" or "attachment" (optional)
+            include_original: How to include the original message: "inline" (default when replying/forwarding), "attachment", or "none" (optional)
 
         Returns:
             Information about the created draft
@@ -414,7 +415,10 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         full_body = body
         attach_msg_id = None
 
-        if orig_msg_id and include_original:
+        if orig_msg_id and include_original is None:
+            include_original = "inline"
+
+        if orig_msg_id and include_original and include_original != "none":
             full_body, attach_msg_id = _prepare_body_with_original(
                 client, body, orig_msg_id, reply_type, include_original,
             )
@@ -514,8 +518,10 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
             """Send an email directly. WARNING: sends immediately, cannot be undone.
 
             Use orig_msg_id + reply_type to send a reply or forward linked
-            to the original message. Use include_original to include the original
-            message content ("inline" or "attachment").
+            to the original message. When orig_msg_id is set, include_original
+            defaults to "inline" (quotes the original message in the body).
+            Use "attachment" to attach it as .eml instead, or "none" to
+            explicitly exclude it.
 
             Args:
                 to: List of primary recipients
@@ -525,7 +531,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
                 bcc: List of BCC recipients (optional)
                 orig_msg_id: ID of the original message when replying or forwarding (optional)
                 reply_type: "r" for reply, "w" for forward. Required when orig_msg_id is set (optional)
-                include_original: How to include the original message: "inline" or "attachment" (optional)
+                include_original: How to include the original message: "inline" (default when replying/forwarding), "attachment", or "none" (optional)
                 draft_id: ID of an existing draft to send (optional)
 
             Returns:
@@ -534,7 +540,10 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
             full_body = body
             attach_msg_id = None
 
-            if orig_msg_id and include_original:
+            if orig_msg_id and include_original is None:
+                include_original = "inline"
+
+            if orig_msg_id and include_original and include_original != "none":
                 full_body, attach_msg_id = _prepare_body_with_original(
                     client, body, orig_msg_id, reply_type, include_original,
                 )
