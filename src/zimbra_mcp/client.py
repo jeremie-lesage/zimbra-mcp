@@ -203,6 +203,9 @@ class ZimbraClient:
         body: str,
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
+        orig_msg_id: str | None = None,
+        reply_type: str | None = None,
+        attach_msg_id: str | None = None,
     ) -> dict[str, Any]:
         """Create an email draft.
 
@@ -212,6 +215,9 @@ class ZimbraClient:
             body: Message body
             cc: CC recipients
             bcc: BCC recipients
+            orig_msg_id: Original message ID (for reply/forward)
+            reply_type: "r" for reply, "w" for forward
+            attach_msg_id: Message ID to attach as .eml (RFC 822)
 
         Returns:
             Information about the created draft
@@ -233,6 +239,12 @@ class ZimbraClient:
                 },
             }
         }
+        if orig_msg_id:
+            params["m"]["origid"] = orig_msg_id
+        if reply_type:
+            params["m"]["rt"] = reply_type
+        if attach_msg_id:
+            params["m"]["attach"] = {"m": {"id": attach_msg_id}}
         return self.request("SaveDraftRequest", "urn:zimbraMail", params)
 
     def get_all_tags(self) -> dict[str, Any]:

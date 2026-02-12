@@ -56,7 +56,22 @@ mcp dev src/zimbra_mcp/server.py
 | `download_attachment` | Download an attachment to a local file |
 | `list_folders` | List all mail folders |
 | `move_emails` | Move emails to a folder |
-| `create_draft` | Create a draft (without sending) |
+| `create_draft` | Create a draft with optional reply/forward support |
+
+#### Reply & Forward Drafts
+
+`create_draft` supports linking a draft to an original message for replies and forwards:
+
+| Parameter | Description |
+|-----------|-------------|
+| `orig_msg_id` | ID of the original message |
+| `reply_type` | `"r"` for reply, `"w"` for forward |
+| `include_original` | `"inline"` to quote in body, `"attachment"` to attach as .eml |
+
+Examples:
+- **Simple draft:** `create_draft(to=[...], subject="...", body="...")`
+- **Reply with quote:** `create_draft(to=[...], subject="Re: ...", body="...", orig_msg_id="123", reply_type="r", include_original="inline")`
+- **Forward as attachment:** `create_draft(to=[...], subject="Fwd: ...", body="...", orig_msg_id="123", reply_type="w", include_original="attachment")`
 
 #### Zimbra Search Syntax
 

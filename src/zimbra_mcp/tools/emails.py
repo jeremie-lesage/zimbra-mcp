@@ -245,8 +245,19 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         body: str,
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
+        orig_msg_id: str | None = None,
+        reply_type: str | None = None,
+        include_original: str | None = None,
     ) -> dict[str, Any]:
         """Create an email draft (without sending it).
+
+        Use orig_msg_id + reply_type to create a reply or forward draft linked
+        to the original message. This sets the conversation thread and flags
+        the original message as replied/forwarded in Zimbra.
+
+        Use include_original to include the original message content:
+        - "inline": quotes the original message body in the draft text
+        - "attachment": attaches the original message as a .eml file
 
         Args:
             to: List of primary recipients
@@ -254,25 +265,97 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             body: Message body (plain text)
             cc: List of CC recipients (optional)
             bcc: List of BCC recipients (optional)
+            orig_msg_id: ID of the original message when replying or forwarding (optional)
+            reply_type: "r" for reply, "w" for forward. Required when orig_msg_id is set (optional)
+            include_original: How to include the original message: "inline" or "attachment" (optional)
 
         Returns:
             Information about the created draft
         """
-        result = client.create_draft(to, subject, body, cc=cc, bcc=bcc)
+        full_body = body
+        attach_msg_id = None
+
+        if include_original and orig_msg_id:
+            if include_original == "attachment":
+                attach_msg_id = orig_msg_id
+            elif include_original == "inline":
+                orig_result = client.get_message(orig_msg_id)
+                orig_msg = orig_result.get("m", {})
+                if isinstance(orig_msg, list):
+                    orig_msg = orig_msg[0] if orig_msg else {}
+
+                orig_parts: list[dict] = []
+                _extract_parts(orig_msg.get("mp", []), orig_parts, [])
+                orig_text = ""
+                for part in orig_parts:
+                    if part.get("content_type") == "text/plain":
+                        orig_text = part.get("content", "")
+                        break
+                if not orig_text:
+                    for part in orig_parts:
+                        if part.get("content_type", "").startswith("text/html"):
+                            orig_text = _html_to_text(part.get("content", ""))
+                            break
+
+                if orig_text:
+                    orig_from = _extract_address(orig_msg.get("e", []), "f") or ""
+                    orig_date = orig_msg.get("d", "")
+                    if orig_date:
+                        from datetime import datetime, timezone
+                        try:
+                            dt = datetime.fromtimestamp(
+                                int(orig_date) / 1000, tz=timezone.utc,
+                            )
+                            orig_date = dt.strftime("%Y-%m-%d %H:%M")
+                        except (ValueError, TypeError):
+                            pass
+
+                    if reply_type == "w":
+                        orig_to = _extract_addresses(orig_msg.get("e", []), "t")
+                        orig_subject = orig_msg.get("su", "")
+                        full_body = (
+                            f"{body}\n\n"
+                            f"---------- Forwarded message ---------\n"
+                            f"From: {orig_from}\n"
+                            f"Date: {orig_date}\n"
+                            f"Subject: {orig_subject}\n"
+                            f"To: {', '.join(orig_to)}\n\n"
+                            f"{orig_text}"
+                        )
+                    else:
+                        quoted = "\n".join(
+                            f"> {line}" for line in orig_text.splitlines()
+                        )
+                        full_body = (
+                            f"{body}\n\n"
+                            f"On {orig_date}, {orig_from} wrote:\n"
+                            f"{quoted}"
+                        )
+
+        result = client.create_draft(
+            to, subject, full_body, cc=cc, bcc=bcc,
+            orig_msg_id=orig_msg_id, reply_type=reply_type,
+            attach_msg_id=attach_msg_id,
+        )
 
         msg = result.get("m", {})
         if isinstance(msg, list):
             msg = msg[0] if msg else {}
 
-        return {
+        response = {
             "success": True,
             "draft_id": msg.get("id"),
             "to": to,
             "cc": cc,
             "bcc": bcc,
             "subject": subject,
-            "body_preview": body[:200] + "..." if len(body) > 200 else body,
+            "body_preview": full_body[:200] + "..." if len(full_body) > 200 else full_body,
         }
+        if orig_msg_id:
+            response["orig_msg_id"] = orig_msg_id
+            response["reply_type"] = reply_type
+            response["include_original"] = include_original
+        return response
 
     @mcp.tool()
     def download_attachment(
