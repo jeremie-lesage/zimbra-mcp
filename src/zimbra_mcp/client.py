@@ -196,6 +196,25 @@ class ZimbraClient:
         }
         return self.request("MsgActionRequest", "urn:zimbraMail", params)
 
+    def delete_messages(self, msg_ids: list[str], hard_delete: bool = False) -> dict[str, Any]:
+        """Delete messages.
+
+        Args:
+            msg_ids: List of message IDs
+            hard_delete: If True, permanently delete; otherwise move to Trash
+
+        Returns:
+            Operation result
+        """
+        op = "delete" if hard_delete else "trash"
+        params = {
+            "action": {
+                "id": ",".join(msg_ids),
+                "op": op,
+            }
+        }
+        return self.request("MsgActionRequest", "urn:zimbraMail", params)
+
     def create_draft(
         self,
         to: list[str],

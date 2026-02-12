@@ -239,6 +239,27 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         }
 
     @mcp.tool()
+    def delete_emails(msg_ids: list[str], hard_delete: bool = False) -> dict[str, Any]:
+        """Delete emails.
+
+        By default, emails are moved to Trash (soft delete).
+        Use hard_delete=True to permanently delete them (cannot be undone).
+
+        Args:
+            msg_ids: List of email IDs to delete
+            hard_delete: If True, permanently delete; otherwise move to Trash (default: False)
+
+        Returns:
+            Deletion confirmation
+        """
+        client.delete_messages(msg_ids, hard_delete=hard_delete)
+        return {
+            "success": True,
+            "deleted_count": len(msg_ids),
+            "hard_delete": hard_delete,
+        }
+
+    @mcp.tool()
     def create_draft(
         to: list[str],
         subject: str,
