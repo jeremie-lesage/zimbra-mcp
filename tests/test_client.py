@@ -390,6 +390,49 @@ def _mock_urlopen_response(content=b"data", headers=None):
 
 
 class TestGetAttachmentContent:
+    def test_token_sent_as_cookie_not_in_url(self, connected_client):
+        connected_client._token = "secret-token"
+        cm, _ = _mock_urlopen_response()
+
+        with patch("urllib.request.urlopen", return_value=cm) as mock_open, \
+             patch("urllib.request.Request") as mock_req:
+            content, filename, content_type = connected_client.get_attachment_content("5", "2")
+
+        # The token must NOT appear in the request URL — it travels in the cookie
+        # (auth=co) so it never lands in access/proxy logs.
+        url = mock_req.call_args[0][0]
+        assert "secret-token" not in url
+        assert "zauthtoken" not in url
+        assert "auth=co" in url
+        assert "id=5" in url
+        assert "part=2" in url
+        headers = mock_req.call_args.kwargs["headers"]
+        assert headers["Cookie"] == "ZM_AUTH_TOKEN=secret-token"
+        assert content == b"data"
+        assert filename == "report.pdf"
+        assert content_type == "application/pdf"
+
+    def test_rest_url_has_no_double_slash(self, connected_client):
+        # The REST base is derived from scheme+host only, so a ZIMBRA_URL with or
+        # without /service/soap and with or without a trailing slash all yield a
+        # single-slash /service/home path. A "//service/home" path is rejected by
+        # Zimbra's /service/* servlet mapping with a 404 (the bug this guards).
+        connected_client._token = "tok"
+        cm, _ = _mock_urlopen_response()
+
+        for url in (
+            "https://zimbra.test/service/soap",
+            "https://zimbra.test/",
+            "https://zimbra.test",
+        ):
+            connected_client.config.url = url
+            with patch("urllib.request.urlopen", return_value=cm), \
+                 patch("urllib.request.Request") as mock_req:
+                connected_client.get_attachment_content("5", "2")
+            request_url = mock_req.call_args[0][0]
+            assert request_url.startswith("https://zimbra.test/service/home/~/?"), request_url
+            assert "//service/home" not in request_url, request_url
+
     def test_rejects_oversized_via_content_length(self, connected_client):
         from zimbra_mcp.client import MAX_ATTACHMENT_SIZE_BYTES
 

@@ -662,26 +662,31 @@ class ZimbraClient:
         Returns:
             Tuple of (content_bytes, filename, content_type)
         """
-        import base64
         import urllib.request
         import urllib.error
-        from urllib.parse import urlencode
+        from urllib.parse import urlencode, urlsplit
 
         self._ensure_connected()
 
-        # Build REST URL for attachment download
-        # Format: /service/home/~/?id=<msg_id>&part=<part_id>&auth=qp&zauthtoken=<token>
-        base_url = self.config.url.replace("/service/soap", "")
+        # Build REST URL for attachment download. The auth token is passed via the
+        # ZM_AUTH_TOKEN cookie (auth=co) rather than the zauthtoken query param, so
+        # it never appears in the URL — keeping it out of any access/proxy logs.
+        #
+        # Derive the base from scheme+host only. ZIMBRA_URL may or may not include
+        # the /service/soap path and may carry a trailing slash; a naive string
+        # replace would leave "//service/home", which Zimbra's /service/* servlet
+        # mapping rejects with a 404.
+        parts = urlsplit(self.config.url)
+        base_url = f"{parts.scheme}://{parts.netloc}"
         params = urlencode({
             "id": msg_id,
             "part": part_id,
-            "auth": "qp",
-            "zauthtoken": self._token,
+            "auth": "co",
         })
         url = f"{base_url}/service/home/~/?{params}"
 
         try:
-            req = urllib.request.Request(url)
+            req = urllib.request.Request(url, headers={"Cookie": f"ZM_AUTH_TOKEN={self._token}"})
             with urllib.request.urlopen(req, timeout=self.config.timeout) as response:
                 # Reject oversized attachments up front when the server advertises
                 # a length, then cap the actual read so a missing/lying header
