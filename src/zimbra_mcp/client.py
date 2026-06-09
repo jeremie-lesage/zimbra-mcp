@@ -13,6 +13,10 @@ from zimbra_mcp.errors import (
     ZimbraOperationError,
 )
 
+# Maximum attachment size to download into memory (100 MiB). Guards against a
+# hostile or accidentally huge attachment exhausting memory.
+MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
+
 
 class ZimbraClient:
     """Client for the Zimbra SOAP API."""
@@ -616,7 +620,19 @@ class ZimbraClient:
         try:
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=self.config.timeout) as response:
-                content = response.read()
+                # Reject oversized attachments up front when the server advertises
+                # a length, then cap the actual read so a missing/lying header
+                # cannot blow past the limit either.
+                declared = response.headers.get("Content-Length")
+                if declared is not None and declared.isdigit() and int(declared) > MAX_ATTACHMENT_SIZE_BYTES:
+                    raise ZimbraOperationError(
+                        f"Attachment too large: {int(declared)} bytes exceeds limit of {MAX_ATTACHMENT_SIZE_BYTES}"
+                    )
+                content = response.read(MAX_ATTACHMENT_SIZE_BYTES + 1)
+                if len(content) > MAX_ATTACHMENT_SIZE_BYTES:
+                    raise ZimbraOperationError(
+                        f"Attachment too large: exceeds limit of {MAX_ATTACHMENT_SIZE_BYTES} bytes"
+                    )
                 content_type = response.headers.get("Content-Type", "application/octet-stream")
 
                 # Extract filename from Content-Disposition header
@@ -634,5 +650,7 @@ class ZimbraClient:
             if e.code == 404:
                 raise ZimbraNotFoundError(f"Attachment not found: msg_id={msg_id}, part_id={part_id}")
             raise ZimbraOperationError(f"Failed to download attachment: {e}")
+        except (ZimbraNotFoundError, ZimbraOperationError):
+            raise
         except Exception as e:
             raise ZimbraOperationError(f"Failed to download attachment: {e}")

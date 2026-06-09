@@ -303,6 +303,51 @@ class TestSendMessage:
         assert params["m"]["rt"] == "r"
 
 
+# --- Attachment download ---
+
+
+def _mock_urlopen_response(content=b"data", headers=None):
+    """Build a context-manager mock mimicking urllib's response object."""
+    default_headers = {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="report.pdf"',
+    }
+    default_headers.update(headers or {})
+
+    resp = MagicMock()
+    resp.read.return_value = content
+    resp.headers.get.side_effect = lambda key, default=None: default_headers.get(key, default)
+    cm = MagicMock()
+    cm.__enter__.return_value = resp
+    cm.__exit__.return_value = False
+    return cm, resp
+
+
+class TestGetAttachmentContent:
+    def test_rejects_oversized_via_content_length(self, connected_client):
+        from zimbra_mcp.client import MAX_ATTACHMENT_SIZE_BYTES
+
+        cm, _ = _mock_urlopen_response(
+            headers={"Content-Length": str(MAX_ATTACHMENT_SIZE_BYTES + 1)}
+        )
+        with patch("urllib.request.urlopen", return_value=cm), \
+             patch("urllib.request.Request"):
+            with pytest.raises(ZimbraOperationError, match="too large"):
+                connected_client.get_attachment_content("5", "2")
+
+    def test_rejects_oversized_when_body_exceeds_cap(self, connected_client):
+        from zimbra_mcp.client import MAX_ATTACHMENT_SIZE_BYTES
+
+        # No/honest Content-Length, but the body itself overflows the cap.
+        cm, resp = _mock_urlopen_response(content=b"x" * (MAX_ATTACHMENT_SIZE_BYTES + 1))
+        with patch("urllib.request.urlopen", return_value=cm), \
+             patch("urllib.request.Request"):
+            with pytest.raises(ZimbraOperationError, match="too large"):
+                connected_client.get_attachment_content("5", "2")
+        # The read must be bounded, not unbounded.
+        resp.read.assert_called_once_with(MAX_ATTACHMENT_SIZE_BYTES + 1)
+
+
 # --- Tag methods ---
 
 
