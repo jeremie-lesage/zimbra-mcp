@@ -1,5 +1,6 @@
 """Tests for email tools."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -368,3 +369,60 @@ class TestSendEmailToolRegistration:
         connected_client.send_message.assert_called_once()
         assert result["success"] is True
         assert result["message_id"] == "200"
+
+
+class TestDownloadAttachmentTool:
+    def test_normal_filename_written_inside_dir(self, email_tools, tmp_path):
+        tools, client = email_tools
+        client.get_attachment_content = MagicMock(
+            return_value=(b"data", "report.pdf", "application/pdf")
+        )
+
+        result = tools["download_attachment"]("1", "2", str(tmp_path))
+
+        assert result["success"] is True
+        assert result["filename"] == "report.pdf"
+        assert (tmp_path / "report.pdf").read_bytes() == b"data"
+
+    def test_traversal_in_server_filename_is_stripped_to_basename(self, email_tools, tmp_path):
+        """A malicious Content-Disposition filename must not escape save_dir."""
+        tools, client = email_tools
+        client.get_attachment_content = MagicMock(
+            return_value=(b"evil", "../../../../tmp/evil.txt", "text/plain")
+        )
+
+        result = tools["download_attachment"]("1", "2", str(tmp_path))
+
+        assert result["success"] is True
+        assert result["filename"] == "evil.txt"
+        # File landed inside save_dir, and nothing was written to the parent.
+        assert (tmp_path / "evil.txt").read_bytes() == b"evil"
+        assert not (tmp_path.parent / "evil.txt").exists()
+
+    def test_absolute_user_filename_is_stripped(self, email_tools, tmp_path):
+        tools, client = email_tools
+        client.get_attachment_content = MagicMock(
+            return_value=(b"x", "orig.bin", "application/octet-stream")
+        )
+
+        result = tools["download_attachment"](
+            "1", "2", str(tmp_path), filename="/etc/cron.d/pwn"
+        )
+
+        assert result["success"] is True
+        assert result["filename"] == "pwn"
+        assert (tmp_path / "pwn").read_bytes() == b"x"
+        assert not Path("/etc/cron.d/pwn").exists()
+
+    def test_dotdot_only_filename_falls_back(self, email_tools, tmp_path):
+        tools, client = email_tools
+        client.get_attachment_content = MagicMock(
+            return_value=(b"y", "..", "application/pdf")
+        )
+
+        result = tools["download_attachment"]("99", "2.1", str(tmp_path))
+
+        assert result["success"] is True
+        # Reduced to "" by basename → fallback name, written inside save_dir.
+        assert result["filename"] == "attachment_99_2_1.pdf"
+        assert (tmp_path / "attachment_99_2_1.pdf").read_bytes() == b"y"

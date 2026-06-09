@@ -3,7 +3,6 @@
 from typing import Any
 
 from pythonzimbra.communication import Communication
-from pythonzimbra.tools import auth
 
 from zimbra_mcp.config import ZimbraConfig
 from zimbra_mcp.errors import (
@@ -11,7 +10,12 @@ from zimbra_mcp.errors import (
     ZimbraConnectionError,
     ZimbraNotFoundError,
     ZimbraOperationError,
+    ZimbraTwoFactorRequiredError,
 )
+
+# Maximum attachment size to download into memory (100 MiB). Guards against a
+# hostile or accidentally huge attachment exhausting memory.
+MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
 
 
 class ZimbraClient:
@@ -28,24 +32,80 @@ class ZimbraClient:
         self._token: str | None = None
 
     def connect(self) -> None:
-        """Establish connection and authentication."""
+        """Establish a connection and authenticate without a 2FA code.
+
+        For accounts without two-factor auth this completes login. For 2FA
+        accounts the server returns a 2FA-pending token, so this raises
+        ``ZimbraTwoFactorRequiredError`` — complete login by calling
+        :meth:`authenticate` with a current code instead.
+        """
+        self.authenticate()
+
+    def authenticate(self, totp_code: str | None = None) -> None:
+        """Authenticate to Zimbra, optionally completing two-factor auth.
+
+        Sends a single ``AuthRequest`` (``urn:zimbraAccount``) with the account
+        password and, when supplied, a ``twoFactorCode``. On a 2FA-enabled
+        account a password-only request succeeds but returns a short-lived
+        *partial* token flagged ``twoFactorAuthRequired``; we reject that and
+        raise ``ZimbraTwoFactorRequiredError`` so the caller knows to supply a
+        current code. A correct password + code yields a full session token
+        (~48h on a default Zimbra config).
+
+        Args:
+            totp_code: Current 6-digit code from the user's authenticator app.
+        """
         try:
-            self._comm = Communication(self.config.url)
+            if self._comm is None:
+                self._comm = Communication(self.config.url)
 
-            self._token = auth.authenticate(
-                self.config.url,
-                self.config.user,
-                self.config.password,
-                use_password=True,
-            )
+            request = self._comm.gen_request()  # unauthenticated — no token yet
+            params: dict[str, Any] = {
+                "account": {"by": "name", "_content": self.config.user},
+                "password": {"_content": self.config.password},
+            }
+            if totp_code:
+                params["twoFactorCode"] = {"_content": totp_code}
+            request.add_request("AuthRequest", params, "urn:zimbraAccount")
 
-            if not self._token:
-                raise ZimbraAuthError("Zimbra authentication failed")
+            response = self._comm.send_request(request)
 
-        except ZimbraAuthError:
+            if response.is_fault():
+                fault_response = response.get_response()
+                fault = fault_response.get("Fault", fault_response)
+                reason = fault.get("Reason", {})
+                msg = reason.get("Text", str(fault)) if isinstance(reason, dict) else str(fault)
+                raise ZimbraAuthError(f"Zimbra authentication failed for {self.config.user}: {msg}")
+
+            resp = response.get_response().get("AuthResponse", {})
+
+            # python-zimbra's response filter collapses single-"_content" dicts
+            # to plain values, so twoFactorAuthRequired arrives as the string
+            # "true" (and authToken as a bare string) — but tolerate both shapes.
+            two_fa = resp.get("twoFactorAuthRequired")
+            if isinstance(two_fa, dict):
+                two_fa = two_fa.get("_content")
+            # Password accepted but only a 2FA-pending token returned: demand a code.
+            if str(two_fa).lower() == "true":
+                raise ZimbraTwoFactorRequiredError(
+                    "Two-factor authentication required: re-authenticate with a current "
+                    "code from your authenticator app."
+                )
+
+            token = resp.get("authToken")
+            if isinstance(token, list):
+                token = token[0] if token else None
+            if isinstance(token, dict):
+                token = token.get("_content")
+            if not token:
+                raise ZimbraAuthError("Zimbra authentication failed: no auth token returned")
+
+            self._token = token
+
+        except (ZimbraAuthError, ZimbraTwoFactorRequiredError):
             raise
         except Exception as e:
-            raise ZimbraConnectionError(f"Unable to connect to Zimbra: {e}")
+            raise ZimbraConnectionError(f"Unable to connect to Zimbra ({self.config.url}): {e}")
 
     def disconnect(self) -> None:
         """Close the connection."""
@@ -92,6 +152,13 @@ class ZimbraClient:
                 fault = fault_response.get("Fault", fault_response)
                 reason = fault.get("Reason", {})
                 error_msg = reason.get("Text", str(fault)) if isinstance(reason, dict) else str(fault)
+                detail = fault.get("Detail", {})
+                code = detail.get("Error", {}).get("Code", "") if isinstance(detail, dict) else ""
+                # An expired/invalid session token (e.g. the ~48h 2FA session
+                # lapsing) — drop it and tell the caller to re-authenticate.
+                if code in ("service.AUTH_EXPIRED", "service.AUTH_REQUIRED"):
+                    self._token = None
+                    raise ZimbraAuthError(f"Zimbra session expired; re-authenticate: {error_msg}")
                 if "no such" in error_msg.lower() or "not found" in error_msg.lower():
                     raise ZimbraNotFoundError(error_msg)
                 raise ZimbraOperationError(error_msg)
@@ -99,7 +166,7 @@ class ZimbraClient:
             response_name = request_name.replace("Request", "Response")
             return response.get_response().get(response_name, {})
 
-        except (ZimbraNotFoundError, ZimbraOperationError):
+        except (ZimbraNotFoundError, ZimbraOperationError, ZimbraAuthError):
             raise
         except Exception as e:
             raise ZimbraOperationError(f"Error during request {request_name}: {e}")
@@ -595,28 +662,45 @@ class ZimbraClient:
         Returns:
             Tuple of (content_bytes, filename, content_type)
         """
-        import base64
         import urllib.request
         import urllib.error
-        from urllib.parse import urlencode
+        from urllib.parse import urlencode, urlsplit
 
         self._ensure_connected()
 
-        # Build REST URL for attachment download
-        # Format: /service/home/~/?id=<msg_id>&part=<part_id>&auth=qp&zauthtoken=<token>
-        base_url = self.config.url.replace("/service/soap", "")
+        # Build REST URL for attachment download. The auth token is passed via the
+        # ZM_AUTH_TOKEN cookie (auth=co) rather than the zauthtoken query param, so
+        # it never appears in the URL — keeping it out of any access/proxy logs.
+        #
+        # Derive the base from scheme+host only. ZIMBRA_URL may or may not include
+        # the /service/soap path and may carry a trailing slash; a naive string
+        # replace would leave "//service/home", which Zimbra's /service/* servlet
+        # mapping rejects with a 404.
+        parts = urlsplit(self.config.url)
+        base_url = f"{parts.scheme}://{parts.netloc}"
         params = urlencode({
             "id": msg_id,
             "part": part_id,
-            "auth": "qp",
-            "zauthtoken": self._token,
+            "auth": "co",
         })
         url = f"{base_url}/service/home/~/?{params}"
 
         try:
-            req = urllib.request.Request(url)
+            req = urllib.request.Request(url, headers={"Cookie": f"ZM_AUTH_TOKEN={self._token}"})
             with urllib.request.urlopen(req, timeout=self.config.timeout) as response:
-                content = response.read()
+                # Reject oversized attachments up front when the server advertises
+                # a length, then cap the actual read so a missing/lying header
+                # cannot blow past the limit either.
+                declared = response.headers.get("Content-Length")
+                if declared is not None and declared.isdigit() and int(declared) > MAX_ATTACHMENT_SIZE_BYTES:
+                    raise ZimbraOperationError(
+                        f"Attachment too large: {int(declared)} bytes exceeds limit of {MAX_ATTACHMENT_SIZE_BYTES}"
+                    )
+                content = response.read(MAX_ATTACHMENT_SIZE_BYTES + 1)
+                if len(content) > MAX_ATTACHMENT_SIZE_BYTES:
+                    raise ZimbraOperationError(
+                        f"Attachment too large: exceeds limit of {MAX_ATTACHMENT_SIZE_BYTES} bytes"
+                    )
                 content_type = response.headers.get("Content-Type", "application/octet-stream")
 
                 # Extract filename from Content-Disposition header
@@ -634,5 +718,7 @@ class ZimbraClient:
             if e.code == 404:
                 raise ZimbraNotFoundError(f"Attachment not found: msg_id={msg_id}, part_id={part_id}")
             raise ZimbraOperationError(f"Failed to download attachment: {e}")
+        except (ZimbraNotFoundError, ZimbraOperationError):
+            raise
         except Exception as e:
             raise ZimbraOperationError(f"Failed to download attachment: {e}")

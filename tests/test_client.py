@@ -11,6 +11,7 @@ from zimbra_mcp.errors import (
     ZimbraConnectionError,
     ZimbraNotFoundError,
     ZimbraOperationError,
+    ZimbraTwoFactorRequiredError,
 )
 
 
@@ -43,23 +44,72 @@ def _get_request_params(connected_client):
 
 
 class TestConnection:
-    @patch("zimbra_mcp.client.auth.authenticate", return_value="tok123")
+    @staticmethod
+    def _auth_response(*, fault=False, auth_token="tok123", two_fa=False, fault_msg="bad creds"):
+        """Build a mock AuthRequest response.
+
+        Mirrors python-zimbra's _filter_response, which collapses single
+        "_content" dicts to plain values — so authToken and twoFactorAuthRequired
+        arrive as bare strings, not {"_content": ...} dicts.
+        """
+        resp = MagicMock()
+        resp.is_fault.return_value = fault
+        if fault:
+            resp.get_response.return_value = {"Fault": {"Reason": {"Text": fault_msg}}}
+        else:
+            ar = {}
+            if two_fa:
+                ar["twoFactorAuthRequired"] = "true"
+            if auth_token is not None:
+                ar["authToken"] = auth_token
+            resp.get_response.return_value = {"AuthResponse": ar}
+        return resp
+
     @patch("zimbra_mcp.client.Communication")
-    def test_connect_success(self, mock_comm_cls, mock_auth, client):
+    def test_connect_success(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        comm.gen_request.return_value = MagicMock()
+        comm.send_request.return_value = self._auth_response(auth_token="tok123")
         client.connect()
         assert client.is_connected
         assert client._token == "tok123"
         mock_comm_cls.assert_called_once_with(client.config.url)
 
-    @patch("zimbra_mcp.client.auth.authenticate", return_value=None)
     @patch("zimbra_mcp.client.Communication")
-    def test_connect_auth_failure(self, mock_comm_cls, mock_auth, client):
+    def test_connect_two_factor_required(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        comm.gen_request.return_value = MagicMock()
+        # Password-only on a 2FA account: partial token + flag → must reject.
+        comm.send_request.return_value = self._auth_response(two_fa=True, auth_token="partial")
+        with pytest.raises(ZimbraTwoFactorRequiredError):
+            client.connect()
+        assert not client.is_connected
+
+    @patch("zimbra_mcp.client.Communication")
+    def test_authenticate_with_code(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        req = MagicMock()
+        comm.gen_request.return_value = req
+        comm.send_request.return_value = self._auth_response(auth_token="full-token")
+        client.authenticate(totp_code="123456")
+        assert client._token == "full-token"
+        params = req.add_request.call_args[0][1]
+        assert params["twoFactorCode"] == {"_content": "123456"}
+        assert params["account"] == {"by": "name", "_content": client.config.user}
+
+    @patch("zimbra_mcp.client.Communication")
+    def test_connect_auth_failure(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        comm.gen_request.return_value = MagicMock()
+        comm.send_request.return_value = self._auth_response(fault=True, fault_msg="authentication failed")
         with pytest.raises(ZimbraAuthError):
             client.connect()
 
-    @patch("zimbra_mcp.client.auth.authenticate", side_effect=Exception("network"))
     @patch("zimbra_mcp.client.Communication")
-    def test_connect_network_failure(self, mock_comm_cls, mock_auth, client):
+    def test_connect_network_failure(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        comm.gen_request.return_value = MagicMock()
+        comm.send_request.side_effect = Exception("network")
         with pytest.raises(ZimbraConnectionError, match="network"):
             client.connect()
 
@@ -102,6 +152,22 @@ class TestRequest:
 
         with pytest.raises(ZimbraNotFoundError, match="no such message"):
             connected_client.request("GetMsgRequest", "urn:zimbraMail")
+
+    def test_request_session_expired_clears_token(self, connected_client):
+        mock_response = MagicMock()
+        mock_response.is_fault.return_value = True
+        mock_response.get_response.return_value = {
+            "Fault": {
+                "Reason": {"Text": "auth credentials have expired"},
+                "Detail": {"Error": {"Code": "service.AUTH_EXPIRED"}},
+            }
+        }
+        _setup_response(connected_client, mock_response)
+
+        with pytest.raises(ZimbraAuthError, match="re-authenticate"):
+            connected_client.request("SearchRequest", "urn:zimbraMail")
+        # Expired token is dropped so the next call forces re-auth.
+        assert connected_client._token is None
 
     def test_request_fault_operation_error(self, connected_client):
         mock_response = MagicMock()
@@ -301,6 +367,94 @@ class TestSendMessage:
         params = _get_request_params(connected_client)
         assert params["m"]["origid"] == "10"
         assert params["m"]["rt"] == "r"
+
+
+# --- Attachment download ---
+
+
+def _mock_urlopen_response(content=b"data", headers=None):
+    """Build a context-manager mock mimicking urllib's response object."""
+    default_headers = {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="report.pdf"',
+    }
+    default_headers.update(headers or {})
+
+    resp = MagicMock()
+    resp.read.return_value = content
+    resp.headers.get.side_effect = lambda key, default=None: default_headers.get(key, default)
+    cm = MagicMock()
+    cm.__enter__.return_value = resp
+    cm.__exit__.return_value = False
+    return cm, resp
+
+
+class TestGetAttachmentContent:
+    def test_token_sent_as_cookie_not_in_url(self, connected_client):
+        connected_client._token = "secret-token"
+        cm, _ = _mock_urlopen_response()
+
+        with patch("urllib.request.urlopen", return_value=cm) as mock_open, \
+             patch("urllib.request.Request") as mock_req:
+            content, filename, content_type = connected_client.get_attachment_content("5", "2")
+
+        # The token must NOT appear in the request URL — it travels in the cookie
+        # (auth=co) so it never lands in access/proxy logs.
+        url = mock_req.call_args[0][0]
+        assert "secret-token" not in url
+        assert "zauthtoken" not in url
+        assert "auth=co" in url
+        assert "id=5" in url
+        assert "part=2" in url
+        headers = mock_req.call_args.kwargs["headers"]
+        assert headers["Cookie"] == "ZM_AUTH_TOKEN=secret-token"
+        assert content == b"data"
+        assert filename == "report.pdf"
+        assert content_type == "application/pdf"
+
+    def test_rest_url_has_no_double_slash(self, connected_client):
+        # The REST base is derived from scheme+host only, so a ZIMBRA_URL with or
+        # without /service/soap and with or without a trailing slash all yield a
+        # single-slash /service/home path. A "//service/home" path is rejected by
+        # Zimbra's /service/* servlet mapping with a 404 (the bug this guards).
+        connected_client._token = "tok"
+        cm, _ = _mock_urlopen_response()
+
+        for url in (
+            "https://zimbra.test/service/soap",
+            "https://zimbra.test/",
+            "https://zimbra.test",
+        ):
+            connected_client.config.url = url
+            with patch("urllib.request.urlopen", return_value=cm), \
+                 patch("urllib.request.Request") as mock_req:
+                connected_client.get_attachment_content("5", "2")
+            request_url = mock_req.call_args[0][0]
+            assert request_url.startswith("https://zimbra.test/service/home/~/?"), request_url
+            assert "//service/home" not in request_url, request_url
+
+    def test_rejects_oversized_via_content_length(self, connected_client):
+        from zimbra_mcp.client import MAX_ATTACHMENT_SIZE_BYTES
+
+        cm, _ = _mock_urlopen_response(
+            headers={"Content-Length": str(MAX_ATTACHMENT_SIZE_BYTES + 1)}
+        )
+        with patch("urllib.request.urlopen", return_value=cm), \
+             patch("urllib.request.Request"):
+            with pytest.raises(ZimbraOperationError, match="too large"):
+                connected_client.get_attachment_content("5", "2")
+
+    def test_rejects_oversized_when_body_exceeds_cap(self, connected_client):
+        from zimbra_mcp.client import MAX_ATTACHMENT_SIZE_BYTES
+
+        # No/honest Content-Length, but the body itself overflows the cap.
+        cm, resp = _mock_urlopen_response(content=b"x" * (MAX_ATTACHMENT_SIZE_BYTES + 1))
+        with patch("urllib.request.urlopen", return_value=cm), \
+             patch("urllib.request.Request"):
+            with pytest.raises(ZimbraOperationError, match="too large"):
+                connected_client.get_attachment_content("5", "2")
+        # The read must be bounded, not unbounded.
+        resp.read.assert_called_once_with(MAX_ATTACHMENT_SIZE_BYTES + 1)
 
 
 # --- Tag methods ---
