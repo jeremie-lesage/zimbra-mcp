@@ -11,6 +11,7 @@ from zimbra_mcp.errors import (
     ZimbraConnectionError,
     ZimbraNotFoundError,
     ZimbraOperationError,
+    ZimbraTwoFactorRequiredError,
 )
 
 
@@ -43,23 +44,72 @@ def _get_request_params(connected_client):
 
 
 class TestConnection:
-    @patch("zimbra_mcp.client.auth.authenticate", return_value="tok123")
+    @staticmethod
+    def _auth_response(*, fault=False, auth_token="tok123", two_fa=False, fault_msg="bad creds"):
+        """Build a mock AuthRequest response.
+
+        Mirrors python-zimbra's _filter_response, which collapses single
+        "_content" dicts to plain values — so authToken and twoFactorAuthRequired
+        arrive as bare strings, not {"_content": ...} dicts.
+        """
+        resp = MagicMock()
+        resp.is_fault.return_value = fault
+        if fault:
+            resp.get_response.return_value = {"Fault": {"Reason": {"Text": fault_msg}}}
+        else:
+            ar = {}
+            if two_fa:
+                ar["twoFactorAuthRequired"] = "true"
+            if auth_token is not None:
+                ar["authToken"] = auth_token
+            resp.get_response.return_value = {"AuthResponse": ar}
+        return resp
+
     @patch("zimbra_mcp.client.Communication")
-    def test_connect_success(self, mock_comm_cls, mock_auth, client):
+    def test_connect_success(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        comm.gen_request.return_value = MagicMock()
+        comm.send_request.return_value = self._auth_response(auth_token="tok123")
         client.connect()
         assert client.is_connected
         assert client._token == "tok123"
         mock_comm_cls.assert_called_once_with(client.config.url)
 
-    @patch("zimbra_mcp.client.auth.authenticate", return_value=None)
     @patch("zimbra_mcp.client.Communication")
-    def test_connect_auth_failure(self, mock_comm_cls, mock_auth, client):
+    def test_connect_two_factor_required(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        comm.gen_request.return_value = MagicMock()
+        # Password-only on a 2FA account: partial token + flag → must reject.
+        comm.send_request.return_value = self._auth_response(two_fa=True, auth_token="partial")
+        with pytest.raises(ZimbraTwoFactorRequiredError):
+            client.connect()
+        assert not client.is_connected
+
+    @patch("zimbra_mcp.client.Communication")
+    def test_authenticate_with_code(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        req = MagicMock()
+        comm.gen_request.return_value = req
+        comm.send_request.return_value = self._auth_response(auth_token="full-token")
+        client.authenticate(totp_code="123456")
+        assert client._token == "full-token"
+        params = req.add_request.call_args[0][1]
+        assert params["twoFactorCode"] == {"_content": "123456"}
+        assert params["account"] == {"by": "name", "_content": client.config.user}
+
+    @patch("zimbra_mcp.client.Communication")
+    def test_connect_auth_failure(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        comm.gen_request.return_value = MagicMock()
+        comm.send_request.return_value = self._auth_response(fault=True, fault_msg="authentication failed")
         with pytest.raises(ZimbraAuthError):
             client.connect()
 
-    @patch("zimbra_mcp.client.auth.authenticate", side_effect=Exception("network"))
     @patch("zimbra_mcp.client.Communication")
-    def test_connect_network_failure(self, mock_comm_cls, mock_auth, client):
+    def test_connect_network_failure(self, mock_comm_cls, client):
+        comm = mock_comm_cls.return_value
+        comm.gen_request.return_value = MagicMock()
+        comm.send_request.side_effect = Exception("network")
         with pytest.raises(ZimbraConnectionError, match="network"):
             client.connect()
 
@@ -102,6 +152,22 @@ class TestRequest:
 
         with pytest.raises(ZimbraNotFoundError, match="no such message"):
             connected_client.request("GetMsgRequest", "urn:zimbraMail")
+
+    def test_request_session_expired_clears_token(self, connected_client):
+        mock_response = MagicMock()
+        mock_response.is_fault.return_value = True
+        mock_response.get_response.return_value = {
+            "Fault": {
+                "Reason": {"Text": "auth credentials have expired"},
+                "Detail": {"Error": {"Code": "service.AUTH_EXPIRED"}},
+            }
+        }
+        _setup_response(connected_client, mock_response)
+
+        with pytest.raises(ZimbraAuthError, match="re-authenticate"):
+            connected_client.request("SearchRequest", "urn:zimbraMail")
+        # Expired token is dropped so the next call forces re-auth.
+        assert connected_client._token is None
 
     def test_request_fault_operation_error(self, connected_client):
         mock_response = MagicMock()
