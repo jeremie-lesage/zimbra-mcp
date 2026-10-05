@@ -129,6 +129,27 @@ class TestFlattenFolders:
         assert len(result) == 3
         assert result[1]["path"] == "root/Inbox"
 
+    def test_shared_mountpoint(self):
+        folder = {
+            "id": "1",
+            "name": "root",
+            "link": {
+                "id": "300",
+                "name": "Shared",
+                "owner": "boss@example.com",
+                "zid": "abc",
+                "rid": "2",
+                "folder": [{"id": "abc:400", "name": "Sub"}],
+            },
+        }
+        result = []
+        _flatten_folders(folder, result)
+        assert [f["path"] for f in result] == ["root", "root/Shared", "root/Shared/Sub"]
+        assert "shared" not in result[0]
+        assert result[1]["shared"] is True
+        assert result[2]["owner"] == "boss@example.com"
+        assert result[2]["id"] == "abc:400"
+
 
 class TestGuessExtension:
     def test_known(self):
@@ -236,6 +257,70 @@ class TestSearchFolderTool:
 
         result = tools["search_folder"]("test")
         assert result["query"] == "test"
+
+
+class TestSearchEmailsInFolder:
+    def _mock_tree(self):
+        return {
+            "folder": {
+                "id": "1",
+                "name": "USER_ROOT",
+                "folder": [{"id": "2", "name": "Inbox"}],
+                "link": {
+                    "id": "300",
+                    "name": "Shared",
+                    "owner": "boss@example.com",
+                    "zid": "abc",
+                    "rid": "2",
+                    "folder": [
+                        {"id": "abc:400", "name": "A", "folder": {"id": "abc:401", "name": "A1"}},
+                        {"id": "abc:500", "name": "B"},
+                    ],
+                },
+            }
+        }
+
+    def test_single_folder(self, email_tools):
+        tools, client = email_tools
+        client.search_messages = MagicMock(return_value={"m": []})
+        client.get_folder = MagicMock()
+
+        tools["search_emails"]("from:x", folder_id="abc:400")
+
+        client.get_folder.assert_not_called()
+        query = client.search_messages.call_args[0][0]
+        assert query == '(inid:"abc:400") (from:x)'
+
+    def test_shared_subtree(self, email_tools):
+        tools, client = email_tools
+        client.search_messages = MagicMock(return_value={"m": []})
+        client.get_folder = MagicMock(return_value=self._mock_tree())
+
+        tools["search_emails"](folder_id="300", include_subfolders=True)
+
+        client.get_folder.assert_called_once_with("/", traverse_mountpoints=True)
+        query = client.search_messages.call_args[0][0]
+        assert query == '(inid:"300" OR inid:"abc:400" OR inid:"abc:401" OR inid:"abc:500")'
+
+    def test_subtree_by_remote_id(self, email_tools):
+        tools, client = email_tools
+        client.search_messages = MagicMock(return_value={"m": []})
+        client.get_folder = MagicMock(return_value=self._mock_tree())
+
+        tools["search_emails"]("subject:x", folder_id="abc:400", include_subfolders=True)
+
+        query = client.search_messages.call_args[0][0]
+        assert query == '(inid:"abc:400" OR inid:"abc:401") (subject:x)'
+
+    def test_subtree_folder_not_found(self, email_tools):
+        tools, client = email_tools
+        client.search_messages = MagicMock()
+        client.get_folder = MagicMock(return_value=self._mock_tree())
+
+        result = tools["search_emails"](folder_id="999", include_subfolders=True)
+
+        assert result["success"] is False
+        client.search_messages.assert_not_called()
 
 
 class TestSearchEmailsTool:

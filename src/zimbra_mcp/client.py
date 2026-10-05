@@ -146,16 +146,19 @@ class ZimbraClient:
         }
         return self.request("GetMsgRequest", "urn:zimbraMail", params)
 
-    def get_folder(self, folder_path: str = "/") -> dict[str, Any]:
+    def get_folder(self, folder_path: str = "/", traverse_mountpoints: bool = False) -> dict[str, Any]:
         """Retrieve a folder and its subfolders.
 
         Args:
             folder_path: Folder path
+            traverse_mountpoints: Also return the subfolders of shared folders (mountpoints)
 
         Returns:
             Folder information
         """
-        params = {"folder": {"path": folder_path}}
+        params: dict[str, Any] = {"folder": {"path": folder_path}}
+        if traverse_mountpoints:
+            params["tr"] = 1
         return self.request("GetFolderRequest", "urn:zimbraMail", params)
 
     def move_messages(self, msg_ids: list[str], folder_id: str) -> dict[str, Any]:

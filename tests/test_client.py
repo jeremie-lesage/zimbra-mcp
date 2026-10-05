@@ -163,6 +163,15 @@ class TestGetFolder:
         connected_client.get_folder("/Inbox")
         params = _get_request_params(connected_client)
         assert params["folder"]["path"] == "/Inbox"
+        assert "tr" not in params
+
+    def test_traverse_mountpoints(self, connected_client):
+        resp = _make_ok_response("GetFolderResponse", {"folder": {}})
+        _setup_response(connected_client, resp)
+
+        connected_client.get_folder("/", traverse_mountpoints=True)
+        params = _get_request_params(connected_client)
+        assert params["tr"] == 1
 
 
 class TestMoveMessages:
