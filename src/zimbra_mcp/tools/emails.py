@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import html as html_lib
 import os
 import re
 from pathlib import Path
 from typing import Any
 
+import nh3
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
 
@@ -47,16 +49,160 @@ def _html_to_text(html: str) -> str:
         br.replace_with("\n")
     for p in soup.find_all("p"):
         p.insert_after("\n")
+    for li in soup.find_all("li"):
+        li.insert_before("- ")
+    for block in soup.find_all(["li", "tr", "div", "h1", "h2", "h3", "h4", "ul", "ol", "table"]):
+        block.insert_after("\n")
 
     # Extract text
     text = soup.get_text(separator=" ")
 
     # Clean up multiple spaces and empty lines
     text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
     text = re.sub(r"\n\s*\n+", "\n\n", text)
     text = text.strip()
 
     return text
+
+
+_HTML_TAGS = {
+    "p", "div", "span", "br", "hr", "b", "strong", "i", "em", "u", "s", "small", "sub", "sup",
+    "ul", "ol", "li", "a", "blockquote", "pre", "code", "h1", "h2", "h3", "h4",
+    "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "font", "center",
+}
+_HTML_ATTRIBUTES = {
+    "*": {"style", "align", "title"},
+    "a": {"href"},
+    "td": {"colspan", "rowspan", "width", "valign", "bgcolor"},
+    "th": {"colspan", "rowspan", "width", "valign", "bgcolor"},
+    "table": {"width", "cellpadding", "cellspacing", "border", "bgcolor"},
+    "font": {"color", "face", "size"},
+    "img": {"src", "alt", "width", "height"},
+}
+# Inline styles keep only these properties, so nothing like background-image:url(...) survives.
+_STYLE_PROPERTIES = {
+    "color", "background-color", "font", "font-family", "font-size", "font-weight", "font-style",
+    "text-decoration", "text-align", "text-indent", "line-height", "vertical-align", "white-space",
+    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+    "border", "border-top", "border-right", "border-bottom", "border-left",
+    "border-color", "border-style", "border-width", "border-collapse",
+    "width", "height", "max-width", "list-style-type",
+}
+
+
+def _sanitize_html(html: str, allow_images: bool = False) -> str:
+    """Reduce HTML to a safe formatting subset.
+
+    Model-written HTML gets the strict set (no images). Quoted originals keep http(s)
+    images; inline cid: images are dropped because the reply does not carry the parts.
+    """
+    tags = set(_HTML_TAGS)
+    if allow_images:
+        soup = BeautifulSoup(html, "html.parser")
+        for img in soup.find_all("img", src=re.compile(r"^\s*cid:", re.I)):
+            img.decompose()
+        html = str(soup)
+        tags.add("img")
+    return nh3.clean(
+        html,
+        tags=tags,
+        attributes=_HTML_ATTRIBUTES,
+        url_schemes={"http", "https", "mailto"},
+        filter_style_properties=_STYLE_PROPERTIES,
+    )
+
+
+def _format_date(ms: Any) -> str:
+    """Format a Zimbra millisecond timestamp the way the quoting header shows it."""
+    from datetime import datetime, timezone
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return str(ms or "")
+
+
+def _prepare_html_with_original(
+    client: ZimbraClient,
+    body_html: str,
+    orig_msg_id: str,
+    reply_type: str | None,
+) -> str:
+    """Append the original message to an HTML body, keeping the original's formatting."""
+    # ponytail: fetches the original a second time (the plain-text quote fetched it too); one
+    # extra SOAP call per HTML reply. Merge the two fetches if replies ever get latency-sensitive.
+    orig_msg = client.get_message(orig_msg_id).get("m", {})
+    if isinstance(orig_msg, list):
+        orig_msg = orig_msg[0] if orig_msg else {}
+
+    parts: list[dict] = []
+    _extract_parts(orig_msg.get("mp", []), parts, [])
+    orig_html = next((p.get("content", "") for p in parts
+                      if p.get("content_type", "").startswith("text/html")), "")
+    if orig_html:
+        soup = BeautifulSoup(orig_html, "html.parser")
+        orig_html = _sanitize_html(
+            soup.body.decode_contents() if soup.body else str(soup), allow_images=True,
+        )
+    else:
+        orig_text = next((p.get("content", "") for p in parts
+                          if p.get("content_type") == "text/plain"), "")
+        if not orig_text:
+            return body_html
+        orig_html = html_lib.escape(orig_text).replace("\n", "<br>")
+
+    esc = html_lib.escape
+    addrs = orig_msg.get("e", [])
+    rows = [
+        ("From", esc(_extract_address(addrs, "f") or "")),
+        ("To", esc(", ".join(_extract_addresses(addrs, "t")))),
+        ("Cc", esc(", ".join(_extract_addresses(addrs, "c")))),
+        ("Sent", esc(_format_date(orig_msg.get("d", "")))),
+        ("Subject", esc(orig_msg.get("su", ""))),
+    ]
+    header = "".join(f"<b>{k}: </b>{v}<br>" for k, v in rows if v)
+    header_style = "font-family:Helvetica,Arial,sans-serif;font-size:12pt;color:#000"
+
+    if reply_type == "w":
+        return (
+            f"{body_html}<br><br>----- Forwarded Message -----<br>"
+            f'<div style="{header_style}">{header}</div><br>{orig_html}'
+        )
+    return (
+        f'{body_html}<br><hr><div style="{header_style}">{header}</div><br>'
+        f'<blockquote style="border-left:2px solid #1010FF;margin-left:5px;padding-left:5px">'
+        f"{orig_html}</blockquote>"
+    )
+
+
+def _compose(
+    client: ZimbraClient,
+    body: str,
+    body_html: str | None,
+    orig_msg_id: str | None,
+    reply_type: str | None,
+    include_original: str | None,
+) -> tuple[str, str | None, str | None, str | None]:
+    """Build the final plain and HTML bodies for a draft or send.
+
+    Returns:
+        Tuple of (full_body, full_html, attach_msg_id, include_original)
+    """
+    full_html = _sanitize_html(body_html) if body_html else None
+    if full_html is not None and not body.strip():
+        body = _html_to_text(full_html)
+    full_body, attach_msg_id = body, None
+
+    if orig_msg_id and include_original is None:
+        include_original = "inline"
+    if orig_msg_id and include_original and include_original != "none":
+        full_body, attach_msg_id = _prepare_body_with_original(
+            client, body, orig_msg_id, reply_type, include_original,
+        )
+        if full_html is not None and include_original == "inline":
+            full_html = _prepare_html_with_original(client, full_html, orig_msg_id, reply_type)
+    return full_body, full_html, attach_msg_id, include_original
 
 
 def _prepare_body_with_original(
@@ -402,14 +548,16 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
     def create_draft(
         to: list[str],
         subject: str,
-        body: str,
+        body: str = "",
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
         orig_msg_id: str | None = None,
         reply_type: str | None = None,
         include_original: str | None = None,
+        body_html: str | None = None,
+        draft_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create an email draft (without sending it).
+        """Create an email draft (without sending it), or update an existing draft.
 
         Use orig_msg_id + reply_type to create a reply or forward draft linked
         to the original message. This sets the conversation thread and flags
@@ -419,34 +567,35 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         the original message in the body). Use "attachment" to attach it as .eml
         instead, or "none" to explicitly exclude it.
 
+        For formatted mail, pass body_html (paragraphs, bold, lists, links, tables,
+        inline styles). The message then carries both HTML and plain text; if body
+        is empty, the plain text is generated from body_html. Replies quote the
+        original's HTML so the thread keeps its formatting. Scripts, images and
+        external resources in body_html are removed.
+
         Args:
             to: List of primary recipients
             subject: Email subject
-            body: Message body (plain text)
+            body: Message body as plain text (optional when body_html is given)
             cc: List of CC recipients (optional)
             bcc: List of BCC recipients (optional)
             orig_msg_id: ID of the original message when replying or forwarding (optional)
             reply_type: "r" for reply, "w" for forward. Required when orig_msg_id is set (optional)
             include_original: How to include the original message: "inline" (default when replying/forwarding), "attachment", or "none" (optional)
+            body_html: Message body as HTML (optional)
+            draft_id: ID of an existing draft to replace with this content (optional)
 
         Returns:
             Information about the created draft
         """
-        full_body = body
-        attach_msg_id = None
-
-        if orig_msg_id and include_original is None:
-            include_original = "inline"
-
-        if orig_msg_id and include_original and include_original != "none":
-            full_body, attach_msg_id = _prepare_body_with_original(
-                client, body, orig_msg_id, reply_type, include_original,
-            )
+        full_body, full_html, attach_msg_id, include_original = _compose(
+            client, body, body_html, orig_msg_id, reply_type, include_original,
+        )
 
         result = client.create_draft(
             to, subject, full_body, cc=cc, bcc=bcc,
             orig_msg_id=orig_msg_id, reply_type=reply_type,
-            attach_msg_id=attach_msg_id,
+            attach_msg_id=attach_msg_id, body_html=full_html, draft_id=draft_id,
         )
 
         msg = result.get("m", {})
@@ -456,6 +605,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         response = {
             "success": True,
             "draft_id": msg.get("id"),
+            "format": "html" if full_html else "text",
             "to": to,
             "cc": cc,
             "bcc": bcc,
@@ -539,6 +689,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
             reply_type: str | None = None,
             include_original: str | None = None,
             draft_id: str | None = None,
+            body_html: str | None = None,
         ) -> dict[str, Any]:
             """Send an email directly. WARNING: sends immediately, cannot be undone.
 
@@ -558,25 +709,19 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
                 reply_type: "r" for reply, "w" for forward. Required when orig_msg_id is set (optional)
                 include_original: How to include the original message: "inline" (default when replying/forwarding), "attachment", or "none" (optional)
                 draft_id: ID of an existing draft to send (optional)
+                body_html: Message body as HTML, sent alongside plain text (optional)
 
             Returns:
                 Information about the sent email
             """
-            full_body = body
-            attach_msg_id = None
-
-            if orig_msg_id and include_original is None:
-                include_original = "inline"
-
-            if orig_msg_id and include_original and include_original != "none":
-                full_body, attach_msg_id = _prepare_body_with_original(
-                    client, body, orig_msg_id, reply_type, include_original,
-                )
+            full_body, full_html, attach_msg_id, include_original = _compose(
+                client, body, body_html, orig_msg_id, reply_type, include_original,
+            )
 
             result = client.send_message(
                 to, subject, full_body, cc=cc, bcc=bcc,
                 orig_msg_id=orig_msg_id, reply_type=reply_type,
-                attach_msg_id=attach_msg_id, draft_id=draft_id,
+                attach_msg_id=attach_msg_id, draft_id=draft_id, body_html=full_html,
             )
 
             msg = result.get("m", {})

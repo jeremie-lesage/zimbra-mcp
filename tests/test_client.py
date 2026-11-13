@@ -623,3 +623,38 @@ class TestDeleteContacts:
         params = _get_request_params(connected_client)
         assert params["action"]["id"] == "100,101"
         assert params["action"]["op"] == "delete"
+
+
+# --- HTML bodies and draft updates ---
+
+
+class TestHtmlBodies:
+    def test_draft_html_is_multipart_alternative(self, connected_client):
+        _setup_response(connected_client, _make_ok_response("SaveDraftResponse", {"m": {"id": "60"}}))
+        connected_client.create_draft(
+            to=["bob@test.com"], subject="Hi", body="Hi Bob", body_html="<p>Hi <b>Bob</b></p>",
+        )
+        mp = _get_request_params(connected_client)["m"]["mp"]
+        assert mp["ct"] == "multipart/alternative"
+        assert [p["ct"] for p in mp["mp"]] == ["text/plain", "text/html"]
+        assert mp["mp"][0]["content"] == "Hi Bob"
+        assert mp["mp"][1]["content"] == "<p>Hi <b>Bob</b></p>"
+
+    def test_draft_without_html_stays_plain(self, connected_client):
+        _setup_response(connected_client, _make_ok_response("SaveDraftResponse", {"m": {"id": "61"}}))
+        connected_client.create_draft(to=["bob@test.com"], subject="Hi", body="Plain")
+        mp = _get_request_params(connected_client)["m"]["mp"]
+        assert mp == {"ct": "text/plain", "content": "Plain"}
+
+    def test_draft_update_sets_existing_id(self, connected_client):
+        _setup_response(connected_client, _make_ok_response("SaveDraftResponse", {"m": {"id": "62"}}))
+        connected_client.create_draft(to=["bob@test.com"], subject="Hi", body="v2", draft_id="62")
+        assert _get_request_params(connected_client)["m"]["id"] == "62"
+
+    def test_send_html_is_multipart_alternative(self, connected_client):
+        _setup_response(connected_client, _make_ok_response("SendMsgResponse", {"m": {"id": "63"}}))
+        connected_client.send_message(
+            to=["bob@test.com"], subject="Hi", body="Hi", body_html="<p>Hi</p>",
+        )
+        mp = _get_request_params(connected_client)["m"]["mp"]
+        assert mp["ct"] == "multipart/alternative"

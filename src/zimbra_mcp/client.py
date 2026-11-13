@@ -16,6 +16,19 @@ from zimbra_mcp.errors import (
 MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
 
 
+def _body_part(body: str, body_html: str | None) -> dict[str, Any]:
+    """Build the message body: plain text alone, or plain text plus HTML as alternatives."""
+    if not body_html:
+        return {"ct": "text/plain", "content": body}
+    return {
+        "ct": "multipart/alternative",
+        "mp": [
+            {"ct": "text/plain", "content": body},
+            {"ct": "text/html", "content": body_html},
+        ],
+    }
+
+
 class ZimbraClient:
     """Client for the Zimbra SOAP API."""
 
@@ -286,18 +299,22 @@ class ZimbraClient:
         orig_msg_id: str | None = None,
         reply_type: str | None = None,
         attach_msg_id: str | None = None,
+        body_html: str | None = None,
+        draft_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create an email draft.
+        """Create an email draft, or replace an existing one.
 
         Args:
             to: Recipients
             subject: Subject
-            body: Message body
+            body: Message body (plain text)
             cc: CC recipients
             bcc: BCC recipients
             orig_msg_id: Original message ID (for reply/forward)
             reply_type: "r" for reply, "w" for forward
             attach_msg_id: Message ID to attach as .eml (RFC 822)
+            body_html: HTML version of the body, sent alongside the plain text
+            draft_id: Existing draft ID to update in place
 
         Returns:
             Information about the created draft
@@ -313,12 +330,11 @@ class ZimbraClient:
             "m": {
                 "e": addresses,
                 "su": subject,
-                "mp": {
-                    "ct": "text/plain",
-                    "content": body,
-                },
+                "mp": _body_part(body, body_html),
             }
         }
+        if draft_id:
+            params["m"]["id"] = draft_id
         if orig_msg_id:
             params["m"]["origid"] = orig_msg_id
         if reply_type:
@@ -338,13 +354,15 @@ class ZimbraClient:
         reply_type: str | None = None,
         attach_msg_id: str | None = None,
         draft_id: str | None = None,
+        body_html: str | None = None,
     ) -> dict[str, Any]:
         """Send an email message.
 
         Args:
             to: Recipients
             subject: Subject
-            body: Message body
+            body: Message body (plain text)
+            body_html: HTML version of the body, sent alongside the plain text
             cc: CC recipients
             bcc: BCC recipients
             orig_msg_id: Original message ID (for reply/forward)
@@ -366,10 +384,7 @@ class ZimbraClient:
             "m": {
                 "e": addresses,
                 "su": subject,
-                "mp": {
-                    "ct": "text/plain",
-                    "content": body,
-                },
+                "mp": _body_part(body, body_html),
             }
         }
         if orig_msg_id:

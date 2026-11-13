@@ -68,8 +68,23 @@ mcp dev src/zimbra_mcp/server.py
 | `move_emails` | Move emails to a folder |
 | `mark_as_read` | Mark emails as read or unread |
 | `delete_emails` | Delete emails (soft delete to Trash, or hard delete) |
-| `create_draft` | Create a draft with optional reply/forward support |
+| `create_draft` | Create or update a draft (plain text or HTML), with optional reply/forward support |
 | `send_email` | Send an email directly (opt-in, requires `ZIMBRA_ENABLE_SEND=true`) |
+
+#### Formatted (HTML) mail
+
+`create_draft` and `send_email` accept `body_html` next to `body`. The message is then saved as
+`multipart/alternative` with both an HTML and a plain-text part. If `body` is empty, the plain text
+is generated from the HTML.
+
+- **Sanitised:** `body_html` is reduced to a formatting subset (paragraphs, bold/italic, lists,
+  links, tables, headings, inline styles). Scripts, event handlers, `<style>` blocks, images,
+  `javascript:` links and style properties such as `background-image: url(...)` are removed.
+- **Replies keep the thread's formatting:** with `include_original="inline"`, the original's HTML
+  is quoted under a From/To/Sent/Subject header. Inline `cid:` images in the original are dropped
+  (the reply does not carry those parts); ordinary `https` images are kept.
+- **Update in place:** pass `draft_id` to `create_draft` to replace an existing draft's content
+  instead of creating a new one.
 
 #### Reply & Forward Drafts
 
@@ -85,6 +100,8 @@ Examples:
 - **Simple draft:** `create_draft(to=[...], subject="...", body="...")`
 - **Reply with quote:** `create_draft(to=[...], subject="Re: ...", body="...", orig_msg_id="123", reply_type="r", include_original="inline")`
 - **Forward as attachment:** `create_draft(to=[...], subject="Fwd: ...", body="...", orig_msg_id="123", reply_type="w", include_original="attachment")`
+- **HTML reply:** `create_draft(to=[...], subject="Re: ...", body_html="<p>Thanks, <b>agreed</b>.</p>", orig_msg_id="123", reply_type="r")`
+- **Revise a draft:** `create_draft(to=[...], subject="Re: ...", body_html="<p>Revised</p>", draft_id="456")`
 
 #### Zimbra Search Syntax
 

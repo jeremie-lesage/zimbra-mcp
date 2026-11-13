@@ -518,3 +518,137 @@ class TestDownloadAttachmentTool:
         assert result["success"] is True
         assert result["filename"] == "attachment_99_2_1.pdf"
         assert (tmp_path / "attachment_99_2_1.pdf").read_bytes() == b"y"
+
+
+# --- HTML bodies ---
+
+from zimbra_mcp.tools.emails import _sanitize_html  # noqa: E402
+
+HTML_ORIGINAL = {
+    "m": {
+        "e": [
+            {"t": "f", "d": "Jonathan", "a": "jonathan@customer.test"},
+            {"t": "t", "a": "test@example.com"},
+        ],
+        "d": "1700000000000",
+        "su": "Supplier pricing",
+        "mp": [{"ct": "multipart/alternative", "mp": [
+            {"ct": "text/plain", "content": "Original plain"},
+            {"ct": "text/html", "content": (
+                "<html><head><style>p{color:red}</style></head><body>"
+                "<p style=\"color:#333\">Original <b>bold</b></p>"
+                "<img src=\"cid:logo123\" alt=\"Logo\">"
+                "<img src=\"https://cdn.customer.test/banner.png\">"
+                "<script>alert(1)</script></body></html>"
+            )},
+        ]}],
+    }
+}
+
+
+class TestSanitizeHtml:
+    def test_strips_script_and_handlers(self):
+        out = _sanitize_html('<p onclick="x()">Hi</p><script>alert(1)</script>')
+        assert "script" not in out and "alert" not in out and "onclick" not in out
+        assert "<p>Hi</p>" in out
+
+    def test_strips_javascript_links(self):
+        out = _sanitize_html('<a href="javascript:alert(1)">x</a><a href="https://synaq.com">y</a>')
+        assert "javascript" not in out
+        assert 'href="https://synaq.com"' in out
+
+    def test_keeps_safe_inline_style_drops_url(self):
+        out = _sanitize_html('<p style="color: red; background-image: url(https://t.test/p.gif)">x</p>')
+        assert "color" in out and "url(" not in out
+
+    def test_strict_mode_drops_images(self):
+        assert "<img" not in _sanitize_html('<p>a</p><img src="https://x.test/a.png">')
+
+    def test_quoted_mode_drops_cid_keeps_https_images(self):
+        out = _sanitize_html(
+            '<img src="cid:logo"><img src="https://x.test/a.png">', allow_images=True,
+        )
+        assert "cid:" not in out
+        assert 'src="https://x.test/a.png"' in out
+
+
+class TestCreateDraftHtml:
+    def test_html_only_derives_plain_text(self, email_tools):
+        tools, client = email_tools
+        client.create_draft = MagicMock(return_value={"m": {"id": "70"}})
+        tools["create_draft"](to=["bob@test.com"], subject="Hi", body_html="<p>Hello <b>Bob</b></p>")
+        args, kwargs = client.create_draft.call_args
+        assert "Hello" in args[2] and "Bob" in args[2] and "<" not in args[2]
+        assert kwargs["body_html"] == "<p>Hello <b>Bob</b></p>"
+
+    def test_model_html_is_sanitised(self, email_tools):
+        tools, client = email_tools
+        client.create_draft = MagicMock(return_value={"m": {"id": "71"}})
+        tools["create_draft"](to=["b@test.com"], subject="Hi", body="x",
+                              body_html="<p>Hi</p><script>bad()</script>")
+        assert "script" not in client.create_draft.call_args.kwargs["body_html"]
+
+    def test_draft_id_passed_through(self, email_tools):
+        tools, client = email_tools
+        client.create_draft = MagicMock(return_value={"m": {"id": "72"}})
+        result = tools["create_draft"](to=["b@test.com"], subject="Hi", body="v2", draft_id="72")
+        assert client.create_draft.call_args.kwargs["draft_id"] == "72"
+        assert result["draft_id"] == "72"
+
+    def test_html_reply_quotes_original_html(self, email_tools):
+        tools, client = email_tools
+        client.get_message = MagicMock(return_value=HTML_ORIGINAL)
+        client.create_draft = MagicMock(return_value={"m": {"id": "73"}})
+        tools["create_draft"](to=["jonathan@customer.test"], subject="RE: Supplier pricing",
+                              body_html="<p>Thanks Jonathan</p>", orig_msg_id="9", reply_type="r")
+        kwargs = client.create_draft.call_args.kwargs
+        html = kwargs["body_html"]
+        assert html.index("Thanks Jonathan") < html.index("<blockquote")
+        assert "<b>bold</b>" in html                      # original formatting kept
+        assert "Jonathan &lt;jonathan@customer.test&gt;" in html  # header escaped
+        assert "Supplier pricing" in html
+        assert "cid:" not in html and "alert" not in html and "<style" not in html
+        assert "https://cdn.customer.test/banner.png" in html
+        plain = client.create_draft.call_args.args[2]
+        assert "> Original plain" in plain                # plain part still quoted
+
+    def test_html_forward_has_no_blockquote(self, email_tools):
+        tools, client = email_tools
+        client.get_message = MagicMock(return_value=HTML_ORIGINAL)
+        client.create_draft = MagicMock(return_value={"m": {"id": "74"}})
+        tools["create_draft"](to=["x@test.com"], subject="FW: Supplier pricing",
+                              body_html="<p>FYI</p>", orig_msg_id="9", reply_type="w")
+        html = client.create_draft.call_args.kwargs["body_html"]
+        assert "Forwarded Message" in html and "<blockquote" not in html
+        assert "<b>bold</b>" in html
+
+    def test_html_reply_to_plain_original_escapes_text(self, email_tools):
+        tools, client = email_tools
+        client.get_message = MagicMock(return_value={"m": {
+            "e": [{"t": "f", "a": "a@test.com"}], "d": "1700000000000", "su": "s",
+            "mp": [{"ct": "text/plain", "content": "line1 <tag>\nline2"}],
+        }})
+        client.create_draft = MagicMock(return_value={"m": {"id": "75"}})
+        tools["create_draft"](to=["a@test.com"], subject="RE: s",
+                              body_html="<p>ok</p>", orig_msg_id="9", reply_type="r")
+        html = client.create_draft.call_args.kwargs["body_html"]
+        assert "line1 &lt;tag&gt;<br>" in html and "line2" in html
+
+    def test_plain_reply_unchanged_when_no_html(self, email_tools):
+        tools, client = email_tools
+        client.get_message = MagicMock(return_value=HTML_ORIGINAL)
+        client.create_draft = MagicMock(return_value={"m": {"id": "76"}})
+        tools["create_draft"](to=["j@test.com"], subject="RE", body="Thanks",
+                              orig_msg_id="9", reply_type="r")
+        assert client.create_draft.call_args.kwargs["body_html"] is None
+
+
+class TestHtmlToTextStructure:
+    def test_list_items_on_own_lines_with_bullets(self):
+        out = _html_to_text("<p>Points:</p><ul><li>first</li><li>second</li></ul>")
+        assert "- first\n" in out and "- second" in out
+
+    def test_table_rows_on_own_lines(self):
+        out = _html_to_text("<table><tr><td>Plan</td><td>Seats</td></tr><tr><td>SM</td><td>250</td></tr></table>")
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        assert lines == ["Plan Seats", "SM 250"]
