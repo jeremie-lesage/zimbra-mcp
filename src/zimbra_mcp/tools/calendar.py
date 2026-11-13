@@ -66,9 +66,9 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
                     "location": appt.get("loc", ""),
                     "start": _ms_to_datetime(inst.get("s")),
                     "start_ms": inst.get("s"),
-                    "duration_minutes": (inst.get("dur", 0) or 0) // 60000,
-                    "all_day": appt.get("allDay", "0") == "1",
-                    "is_recurring": inst.get("ridZ") is not None,
+                    "duration_minutes": (inst.get("dur") or appt.get("dur") or 0) // 60000,
+                    "all_day": _is_true(appt.get("allDay")),
+                    "is_recurring": _is_true(appt.get("recur")),
                     "organizer": appt.get("or", {}).get("a"),
                     "status": appt.get("status"),
                     "fragment": appt.get("fr", ""),
@@ -139,7 +139,7 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "start": start_info.get("d"),
             "end": end_info.get("d"),
             "timezone": start_info.get("tz"),
-            "all_day": comp.get("allDay") == "1",
+            "all_day": _is_true(comp.get("allDay")),
             "status": comp.get("status"),
             "class": comp.get("class", "PUB"),
             "organizer": {
@@ -295,6 +295,11 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "busy_slots": sorted(busy_slots, key=lambda s: s.get("start", "")),
             "free_slots": sorted(free_slots, key=lambda s: s.get("start", "")),
         }
+
+
+def _is_true(value: Any) -> bool:
+    """Read a Zimbra boolean attribute, returned as a bool or as "1"/"0"."""
+    return value is True or value in ("1", "true", "TRUE")
 
 
 def _ms_to_datetime(ms: int | None) -> str | None:

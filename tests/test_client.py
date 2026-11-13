@@ -553,6 +553,22 @@ class TestSearchCalendar:
         assert params["types"] == "appointment"
         assert params["calExpandInstStart"] == 1000
         assert params["calExpandInstEnd"] == 2000
+        assert params["offset"] == 0
+
+    def test_follows_pages(self, connected_client):
+        pages = [
+            _make_ok_response("SearchResponse", {"appt": [{"id": "1"}, {"id": "2"}], "more": True}),
+            _make_ok_response("SearchResponse", {"appt": {"id": "3"}, "more": False}),
+        ]
+        connected_client._comm.gen_request.return_value = MagicMock()
+        connected_client._comm.send_request.side_effect = pages
+
+        result = connected_client.search_calendar(1000, 2000, page_size=2)
+
+        assert [a["id"] for a in result["appt"]] == ["1", "2", "3"]
+        add_request = connected_client._comm.gen_request.return_value.add_request
+        assert [c[0][1]["offset"] for c in add_request.call_args_list] == [0, 2]
+        assert all(c[0][1]["limit"] == 2 for c in add_request.call_args_list)
 
 
 class TestGetAppointment:

@@ -7,9 +7,18 @@ import pytest
 from tests.conftest import capture_tools
 from zimbra_mcp.tools.calendar import (
     _extract_alarm,
+    _is_true,
     _ms_to_datetime,
     register_calendar_tools,
 )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(True, True), ("1", True), (False, False), ("0", False), (None, False)],
+)
+def test_is_true(value, expected):
+    assert _is_true(value) is expected
 
 
 class TestMsToDatetime:
@@ -82,9 +91,11 @@ class TestGetCalendarEvents:
             "appt": [{
                 "id": "600",
                 "name": "Daily",
+                "dur": 1800000,
+                "recur": True,
                 "inst": [
-                    {"s": 1705312200000, "dur": 1800000, "ridZ": "20240115T103000Z"},
-                    {"s": 1705398600000, "dur": 1800000, "ridZ": "20240116T103000Z"},
+                    {"s": 1705312200000, "ridZ": "20240115T103000Z"},
+                    {"s": 1705398600000, "dur": 2700000, "ridZ": "20240116T103000Z", "ex": True},
                 ],
             }]
         })
@@ -92,6 +103,41 @@ class TestGetCalendarEvents:
         result = tools["get_calendar_events"](start_date="2024-01-15", days=2)
         assert result["count"] == 2
         assert all(e["is_recurring"] for e in result["events"])
+        assert [e["duration_minutes"] for e in result["events"]] == [30, 45]
+
+    def test_single_event_with_rid(self, cal_tools):
+        tools, client = cal_tools
+        client.search_calendar = MagicMock(return_value={
+            "appt": [{
+                "id": "601",
+                "name": "One-off",
+                "dur": 10800000,
+                "allDay": False,
+                "inst": [{"s": 1705312200000, "ridZ": "20240115T103000Z"}],
+            }]
+        })
+
+        event = tools["get_calendar_events"](start_date="2024-01-15", days=1)["events"][0]
+        assert event["is_recurring"] is False
+        assert event["duration_minutes"] == 180
+        assert event["all_day"] is False
+
+    def test_all_day_boolean(self, cal_tools):
+        tools, client = cal_tools
+        client.search_calendar = MagicMock(return_value={
+            "appt": [{
+                "id": "602",
+                "name": "Holiday",
+                "dur": 86400000,
+                "allDay": True,
+                "recur": True,
+                "inst": [{"s": 1705276800000, "ridZ": "20240115"}],
+            }]
+        })
+
+        event = tools["get_calendar_events"](start_date="2024-01-15", days=1)["events"][0]
+        assert event["all_day"] is True
+        assert event["duration_minutes"] == 1440
 
 
 class TestGetEventDetails:

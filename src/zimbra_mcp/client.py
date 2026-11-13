@@ -473,24 +473,36 @@ class ZimbraClient:
         start_time: int,
         end_time: int,
         folder_id: str = "10",
+        page_size: int = 100,
     ) -> dict[str, Any]:
-        """Search for calendar events.
+        """Search for calendar events, following every result page.
 
         Args:
             start_time: Start timestamp (ms)
             end_time: End timestamp (ms)
             folder_id: Calendar folder ID (10 by default)
+            page_size: Number of appointments requested per page
 
         Returns:
-            List of events
+            All appointments of the period under "appt"
         """
-        params = {
-            "query": f"inid:{folder_id}",
-            "types": "appointment",
-            "calExpandInstStart": start_time,
-            "calExpandInstEnd": end_time,
-        }
-        return self.request("SearchRequest", "urn:zimbraMail", params)
+        appointments: list[dict[str, Any]] = []
+        while True:
+            params = {
+                "query": f"inid:{folder_id}",
+                "types": "appointment",
+                "calExpandInstStart": start_time,
+                "calExpandInstEnd": end_time,
+                "limit": page_size,
+                "offset": len(appointments),
+            }
+            page = self.request("SearchRequest", "urn:zimbraMail", params)
+            items = page.get("appt", [])
+            if not isinstance(items, list):
+                items = [items]
+            appointments.extend(items)
+            if not items or not page.get("more"):
+                return {"appt": appointments}
 
     def get_appointment(self, appt_id: str) -> dict[str, Any]:
         """Retrieve event details.
