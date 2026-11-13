@@ -395,7 +395,6 @@ class TestDownloadAttachmentTool:
 
         assert result["success"] is True
         assert result["filename"] == "evil.txt"
-        # File landed inside save_dir, and nothing was written to the parent.
         assert (tmp_path / "evil.txt").read_bytes() == b"evil"
         assert not (tmp_path.parent / "evil.txt").exists()
 
@@ -423,6 +422,5 @@ class TestDownloadAttachmentTool:
         result = tools["download_attachment"]("99", "2.1", str(tmp_path))
 
         assert result["success"] is True
-        # Reduced to "" by basename → fallback name, written inside save_dir.
         assert result["filename"] == "attachment_99_2_1.pdf"
         assert (tmp_path / "attachment_99_2_1.pdf").read_bytes() == b"y"

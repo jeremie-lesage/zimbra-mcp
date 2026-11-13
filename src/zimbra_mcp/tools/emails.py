@@ -482,19 +482,14 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         # Download attachment content
         content, original_filename, content_type = client.get_attachment_content(msg_id, part_id)
 
-        # Determine final filename. Strip any directory components first: both the
-        # user-supplied `filename` and the server-supplied `original_filename`
-        # (from the Content-Disposition header, which is controlled by the email
-        # sender) are untrusted and could contain "../" or absolute paths that
-        # would escape save_dir.
+        # Determine final filename
         final_filename = Path(filename or original_filename or "").name
         if not final_filename or final_filename in (".", "..") or final_filename == "attachment":
             # Fallback: use part_id and guess extension from content_type
             ext = _guess_extension(content_type)
             final_filename = f"attachment_{msg_id}_{part_id.replace('.', '_')}{ext}"
 
-        # Write file. Defence in depth: confirm the resolved path stays within
-        # save_dir even after the basename reduction above.
+        # Write file
         file_path = (save_dir / final_filename).resolve()
         if save_dir != file_path.parent:
             return {

@@ -12,7 +12,7 @@ def register_auth_tools(mcp: FastMCP, client: ZimbraClient) -> None:
 
     These drive interactive two-factor login: the user supplies a current TOTP
     code, the client completes the SOAP ``AuthRequest``, and the resulting
-    session token is reused by every other tool until it expires (~48h).
+    session token is reused by every other tool until it expires.
 
     Args:
         mcp: FastMCP instance
@@ -25,8 +25,7 @@ def register_auth_tools(mcp: FastMCP, client: ZimbraClient) -> None:
 
         Call this when another tool reports that authentication is required.
         Ask the user for the current 6-digit code from their authenticator app
-        and pass it here. The session lasts about 48 hours; re-run when it
-        expires.
+        and pass it here. Re-run when the session expires.
 
         Args:
             code: Current 6-digit TOTP code from the user's authenticator app.
@@ -38,7 +37,6 @@ def register_auth_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         return {
             "status": "authenticated",
             "user": client.config.user,
-            "session_lifetime_hours": 48,
         }
 
     @mcp.tool()

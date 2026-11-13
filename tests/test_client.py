@@ -46,12 +46,7 @@ def _get_request_params(connected_client):
 class TestConnection:
     @staticmethod
     def _auth_response(*, fault=False, auth_token="tok123", two_fa=False, fault_msg="bad creds"):
-        """Build a mock AuthRequest response.
-
-        Mirrors python-zimbra's _filter_response, which collapses single
-        "_content" dicts to plain values — so authToken and twoFactorAuthRequired
-        arrive as bare strings, not {"_content": ...} dicts.
-        """
+        """Build a mock AuthRequest response."""
         resp = MagicMock()
         resp.is_fault.return_value = fault
         if fault:
@@ -79,7 +74,6 @@ class TestConnection:
     def test_connect_two_factor_required(self, mock_comm_cls, client):
         comm = mock_comm_cls.return_value
         comm.gen_request.return_value = MagicMock()
-        # Password-only on a 2FA account: partial token + flag → must reject.
         comm.send_request.return_value = self._auth_response(two_fa=True, auth_token="partial")
         with pytest.raises(ZimbraTwoFactorRequiredError):
             client.connect()
@@ -166,7 +160,6 @@ class TestRequest:
 
         with pytest.raises(ZimbraAuthError, match="re-authenticate"):
             connected_client.request("SearchRequest", "urn:zimbraMail")
-        # Expired token is dropped so the next call forces re-auth.
         assert connected_client._token is None
 
     def test_request_fault_operation_error(self, connected_client):
@@ -398,8 +391,6 @@ class TestGetAttachmentContent:
              patch("urllib.request.Request") as mock_req:
             content, filename, content_type = connected_client.get_attachment_content("5", "2")
 
-        # The token must NOT appear in the request URL — it travels in the cookie
-        # (auth=co) so it never lands in access/proxy logs.
         url = mock_req.call_args[0][0]
         assert "secret-token" not in url
         assert "zauthtoken" not in url
@@ -413,10 +404,6 @@ class TestGetAttachmentContent:
         assert content_type == "application/pdf"
 
     def test_rest_url_has_no_double_slash(self, connected_client):
-        # The REST base is derived from scheme+host only, so a ZIMBRA_URL with or
-        # without /service/soap and with or without a trailing slash all yield a
-        # single-slash /service/home path. A "//service/home" path is rejected by
-        # Zimbra's /service/* servlet mapping with a 404 (the bug this guards).
         connected_client._token = "tok"
         cm, _ = _mock_urlopen_response()
 
@@ -447,13 +434,11 @@ class TestGetAttachmentContent:
     def test_rejects_oversized_when_body_exceeds_cap(self, connected_client):
         from zimbra_mcp.client import MAX_ATTACHMENT_SIZE_BYTES
 
-        # No/honest Content-Length, but the body itself overflows the cap.
         cm, resp = _mock_urlopen_response(content=b"x" * (MAX_ATTACHMENT_SIZE_BYTES + 1))
         with patch("urllib.request.urlopen", return_value=cm), \
              patch("urllib.request.Request"):
             with pytest.raises(ZimbraOperationError, match="too large"):
                 connected_client.get_attachment_content("5", "2")
-        # The read must be bounded, not unbounded.
         resp.read.assert_called_once_with(MAX_ATTACHMENT_SIZE_BYTES + 1)
 
 

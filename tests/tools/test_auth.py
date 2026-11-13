@@ -17,7 +17,6 @@ class TestAuthenticate:
         tools, client = auth_tools
         client.authenticate = lambda totp_code=None: setattr(client, "_seen_code", totp_code)
         result = tools["zimbra_authenticate"](code="  123456  ")
-        # Code is trimmed before being handed to the client.
         assert client._seen_code == "123456"
         assert result["status"] == "authenticated"
         assert result["user"] == client.config.user

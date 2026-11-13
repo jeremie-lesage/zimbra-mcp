@@ -17,8 +17,8 @@ from zimbra_mcp.tools import (
     register_tag_tools,
 )
 
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__package__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -33,9 +33,6 @@ async def lifespan(mcp: FastMCP) -> AsyncIterator[dict]:
         config = ZimbraConfig.from_env()
         client = ZimbraClient(config)
 
-        # Register tools before authenticating: the connection is established
-        # lazily, and 2FA accounts must authenticate via the zimbra_authenticate
-        # tool after startup (there is no terminal to prompt for a code here).
         register_email_tools(mcp, client, config)
         register_tag_tools(mcp, client)
         register_calendar_tools(mcp, client)
