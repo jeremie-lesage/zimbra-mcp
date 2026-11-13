@@ -80,7 +80,7 @@ re-authenticate automatically.
 | `search_emails` | Search with Zimbra syntax (in:inbox, from:, tag:, etc.), optionally restricted to a folder (`folder_id`) and its subfolders (`include_subfolders`), shared folders included |
 | `get_email` | Retrieve an email by ID with full body |
 | `download_attachment` | Download an attachment to a local file (never overwrites, confined to `ZIMBRA_DOWNLOAD_DIR` when set) |
-| `list_folders` | List all mail folders, including shared folders and their subfolders |
+| `list_folders` | List mail folders, shared folders included, one level at a time: `path` picks the parent, `depth` the number of levels (`None` for the whole tree) |
 | `search_folder` | Search for a folder by name or path (case-insensitive partial match) |
 | `move_emails` | Move emails to a folder |
 | `mark_as_read` | Mark emails as read or unread |

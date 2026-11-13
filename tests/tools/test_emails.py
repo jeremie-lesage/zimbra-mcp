@@ -272,6 +272,44 @@ class TestSearchFolderTool:
         assert result["query"] == "test"
 
 
+class TestListFoldersTool:
+    def _mock_folder_tree(self):
+        return TestSearchFolderTool()._mock_folder_tree()
+
+    def test_top_level_by_default(self, email_tools):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_folder_tree())
+
+        folders = tools["list_folders"]()["folders"]
+
+        assert [f["name"] for f in folders] == ["Inbox", "Sent", "Drafts", "Work"]
+        assert folders[3]["subfolder_count"] == 2
+        assert "subfolder_count" not in folders[0]
+
+    def test_subfolders_of_path(self, email_tools):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_folder_tree())
+
+        for path in ("Work", "/work/", "USER_ROOT/Work"):
+            folders = tools["list_folders"](path=path)["folders"]
+            assert [f["path"] for f in folders] == ["USER_ROOT/Work/Projects", "USER_ROOT/Work/Inbox-Archive"]
+
+    def test_unlimited_depth(self, email_tools):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_folder_tree())
+
+        folders = tools["list_folders"](depth=None)["folders"]
+
+        assert len(folders) == 6
+        assert all("subfolder_count" not in f for f in folders)
+
+    def test_unknown_path(self, email_tools):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_folder_tree())
+
+        assert tools["list_folders"](path="Nope")["folders"] == []
+
+
 class TestSearchEmailsInFolder:
     def _mock_tree(self):
         return {

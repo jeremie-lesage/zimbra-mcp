@@ -5,6 +5,7 @@ from __future__ import annotations
 import html as html_lib
 import os
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -433,14 +434,21 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         return email_detail
 
     @mcp.tool()
-    def list_folders() -> dict[str, Any]:
-        """List all mail folders, including shared folders and their subfolders.
+    def list_folders(path: str | None = None, depth: int | None = 1) -> dict[str, Any]:
+        """List mail folders, including shared folders, level by level.
 
         Shared folders (and their subfolders) are flagged with "shared": true
-        and the "owner" of the share.
+        and the "owner" of the share. A folder whose subfolders lie beyond
+        the requested depth carries "subfolder_count": browse it by passing
+        its path.
+
+        Args:
+            path: Folder whose subfolders are listed, e.g. "Clients/ACME"
+                (default: the top level)
+            depth: Number of levels returned below path (default: 1, None for all)
 
         Returns:
-            Folder tree with their IDs and counters
+            Folders with their IDs, paths and counters
         """
         result = client.get_folder("/", traverse_mountpoints=True)
 
@@ -448,7 +456,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         for f in _root_folders(result):
             _flatten_folders(f, folders)
 
-        return {"folders": folders}
+        return {"folders": _folder_level(folders, path, depth)}
 
     @mcp.tool()
     def search_folder(name: str) -> dict[str, Any]:
@@ -916,6 +924,34 @@ def _flatten_folders(
 
     for subfolder in _subfolders(folder):
         _flatten_folders(subfolder, result, folder_path, shared_owner)
+
+
+def _folder_level(folders: list[dict], path: str | None, depth: int | None) -> list[dict]:
+    """Keep the folders at most depth levels below path, in a flattened tree."""
+    if not folders:
+        return []
+
+    root = folders[0]["path"]
+    base = (path or "").strip("/")
+    if base.lower() == root.lower() or base.lower().startswith(root.lower() + "/"):
+        base = base[len(root):].lstrip("/")
+    prefix = f"{root}/{base}" if base else root
+    base_depth = prefix.count("/")
+    children = Counter(f["path"].lower().rpartition("/")[0] for f in folders)
+
+    level = []
+    for folder in folders:
+        if not folder["path"].lower().startswith(prefix.lower() + "/"):
+            continue
+        relative_depth = folder["path"].count("/") - base_depth
+        if depth is not None and relative_depth > depth:
+            continue
+        entry = dict(folder)
+        subfolders = children[folder["path"].lower()]
+        if depth is not None and relative_depth == depth and subfolders:
+            entry["subfolder_count"] = subfolders
+        level.append(entry)
+    return level
 
 
 def _find_folder(folder: dict, folder_id: str) -> dict | None:
