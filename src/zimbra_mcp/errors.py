@@ -19,6 +19,17 @@ class ZimbraAuthError(ZimbraMCPError):
     pass
 
 
+class ZimbraTwoFactorRequiredError(ZimbraAuthError):
+    """The account has 2FA enabled and a current TOTP code is required.
+
+    Raised when the password is accepted but the server returns a 2FA-pending
+    token (``twoFactorAuthRequired``) instead of a usable session. The caller
+    should obtain a current code from the user and re-authenticate with it.
+    """
+
+    pass
+
+
 class ZimbraNotFoundError(ZimbraMCPError):
     """Resource not found in Zimbra."""
 
