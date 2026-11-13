@@ -60,6 +60,19 @@ mcp dev src/zimbra_mcp/server.py
 
 ## Available Tools
 
+### Authentication
+
+| Tool | Description |
+|------|-------------|
+| `zimbra_authenticate` | Complete a two-factor login with the current code from an authenticator app |
+| `zimbra_auth_status` | Report whether a Zimbra session is active and for which account |
+
+Accounts without two-factor authentication log in at startup and need neither tool. For a 2FA
+account, the server starts without a session: the first tool call fails with an authentication
+error, the user gives the current TOTP code and `zimbra_authenticate` opens the session. When the
+session expires, call `zimbra_authenticate` again with a new code. Accounts without 2FA
+re-authenticate automatically.
+
 ### Emails
 
 | Tool | Description |
@@ -98,7 +111,7 @@ is generated from the HTML.
 |-----------|-------------|
 | `orig_msg_id` | ID of the original message |
 | `reply_type` | `"r"` for reply, `"w"` for forward |
-| `include_original` | `"inline"` to quote in body, `"attachment"` to attach as .eml |
+| `include_original` | `"inline"` to quote in body (default), `"attachment"` to attach as .eml, `"none"` to leave it out |
 
 Examples:
 - **Simple draft:** `create_draft(to=[...], subject="...", body="...")`
@@ -215,7 +228,7 @@ Add to your MCP configuration (`~/.claude/settings.json`):
 zimbra-mcp/
 ├── pyproject.toml
 ├── README.md
-├── CLAUDE.md
+├── AGENTS.md
 ├── .env.example
 ├── src/
 │   └── zimbra_mcp/
@@ -226,6 +239,7 @@ zimbra-mcp/
 │       ├── errors.py          # Exceptions
 │       └── tools/
 │           ├── __init__.py
+│           ├── auth.py        # Two-factor login tools
 │           ├── emails.py      # Email tools
 │           ├── tags.py        # Tag tools
 │           ├── contacts.py    # Contact tools
@@ -236,8 +250,27 @@ zimbra-mcp/
     ├── test_errors.py
     ├── test_client.py
     └── tools/
+        ├── test_auth.py
         ├── test_emails.py
         ├── test_tags.py
         ├── test_contacts.py
         └── test_calendar.py
 ```
+
+## Contributing
+
+See [AGENTS.md](AGENTS.md) for the conventions to follow, whether you write the code yourself or
+with an AI assistant. Pull requests target the `develop` branch.
+
+## Acknowledgements
+
+Many thanks to the people who contributed to this project:
+
+- **Fritz Kunstler** ([@dfkunstler](https://github.com/dfkunstler)): two-factor authentication,
+  attachment download hardening and the REST URL fix ([#1](https://github.com/jeremie-lesage/zimbra-mcp/pull/1))
+- **Cindy Piassale** ([@cindyPiassale](https://github.com/cindyPiassale)): shared folders and
+  subfolder search ([#2](https://github.com/jeremie-lesage/zimbra-mcp/pull/2))
+- **Sam Gelbart** ([@synaq](https://github.com/synaq)): HTML bodies, HTML reply quoting,
+  sanitising and draft updates ([#3](https://github.com/jeremie-lesage/zimbra-mcp/pull/3))
+- **Ilies** ([@Saywyz](https://github.com/Saywyz)): security hardening of attachments, deletion,
+  authentication and configuration ([#4](https://github.com/jeremie-lesage/zimbra-mcp/pull/4))
