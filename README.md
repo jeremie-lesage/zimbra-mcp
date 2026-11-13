@@ -60,10 +60,10 @@ mcp dev src/zimbra_mcp/server.py
 
 | Tool | Description |
 |------|-------------|
-| `search_emails` | Search with Zimbra syntax (in:inbox, from:, tag:, etc.) |
+| `search_emails` | Search with Zimbra syntax (in:inbox, from:, tag:, etc.), optionally restricted to a folder (`folder_id`) and its subfolders (`include_subfolders`), shared folders included |
 | `get_email` | Retrieve an email by ID with full body |
 | `download_attachment` | Download an attachment to a local file |
-| `list_folders` | List all mail folders |
+| `list_folders` | List all mail folders, including shared folders and their subfolders |
 | `search_folder` | Search for a folder by name or path (case-insensitive partial match) |
 | `move_emails` | Move emails to a folder |
 | `mark_as_read` | Mark emails as read or unread |

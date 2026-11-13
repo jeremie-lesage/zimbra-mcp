@@ -149,9 +149,11 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
 
     @mcp.tool()
     def search_emails(
-        query: str,
+        query: str = "",
         limit: int = 50,
         offset: int = 0,
+        folder_id: str | None = None,
+        include_subfolders: bool = False,
     ) -> dict[str, Any]:
         """Search emails with Zimbra syntax.
 
@@ -168,12 +170,32 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
                 - Parentheses: "(from:john OR from:mary) subject:urgent"
             limit: Maximum number of results (default: 50)
             offset: Offset for pagination
+            folder_id: Restrict the search to this folder ID (use list_folders or
+                search_folder to get it). Works with shared folders and their subfolders.
+            include_subfolders: With folder_id, also search all its subfolders
+                (e.g. a whole shared folder tree)
 
         Returns:
             List of found emails with their metadata
         """
         # Convert ISO dates to Zimbra format
         query = _convert_iso_dates(query)
+
+        if folder_id:
+            folder_ids = [folder_id]
+            if include_subfolders:
+                tree = client.get_folder("/", traverse_mountpoints=True)
+                for root in _root_folders(tree):
+                    found = _find_folder(root, folder_id)
+                    if found is not None:
+                        folder_ids = []
+                        _collect_folder_ids(found, folder_ids)
+                        break
+                else:
+                    return {"success": False, "error": f"Folder not found: {folder_id}"}
+            folder_clause = " OR ".join(f'inid:"{fid}"' for fid in folder_ids)
+            folder_clause = f"({folder_clause})"
+            query = f"{folder_clause} ({query})" if query.strip() else folder_clause
         result = client.search_messages(query, limit=limit, offset=offset)
 
         messages = result.get("m", [])
@@ -266,20 +288,19 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
 
     @mcp.tool()
     def list_folders() -> dict[str, Any]:
-        """List all mail folders.
+        """List all mail folders, including shared folders and their subfolders.
+
+        Shared folders (and their subfolders) are flagged with "shared": true
+        and the "owner" of the share.
 
         Returns:
             Folder tree with their IDs and counters
         """
-        result = client.get_folder("/")
+        result = client.get_folder("/", traverse_mountpoints=True)
 
-        folders = []
-        folder_data = result.get("folder", {})
-        if isinstance(folder_data, list):
-            for f in folder_data:
-                _flatten_folders(f, folders)
-        else:
-            _flatten_folders(folder_data, folders)
+        folders: list[dict] = []
+        for f in _root_folders(result):
+            _flatten_folders(f, folders)
 
         return {"folders": folders}
 
@@ -296,15 +317,11 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         Returns:
             Matching folders with their IDs, paths, and counters
         """
-        result = client.get_folder("/")
+        result = client.get_folder("/", traverse_mountpoints=True)
 
         all_folders: list[dict] = []
-        folder_data = result.get("folder", {})
-        if isinstance(folder_data, list):
-            for f in folder_data:
-                _flatten_folders(f, all_folders)
-        else:
-            _flatten_folders(folder_data, all_folders)
+        for f in _root_folders(result):
+            _flatten_folders(f, all_folders)
 
         query_lower = name.lower()
         matches = [
@@ -656,10 +673,36 @@ def _extract_parts(
             _extract_parts(part["mp"], body_parts, attachments)
 
 
-def _flatten_folders(folder: dict, result: list[dict], path: str = "") -> None:
-    """Flatten the folder tree."""
+def _subfolders(folder: dict) -> list[dict]:
+    """Return the child folders and mountpoints (shared folders) of a folder."""
+    children = []
+    for key in ("folder", "link"):
+        items = folder.get(key, [])
+        if not isinstance(items, list):
+            items = [items]
+        children.extend(items)
+    return children
+
+
+def _root_folders(result: dict) -> list[dict]:
+    """Return the top-level folders of a GetFolderResponse."""
+    folder_data = result.get("folder", {})
+    return folder_data if isinstance(folder_data, list) else [folder_data]
+
+
+def _flatten_folders(
+    folder: dict,
+    result: list[dict],
+    path: str = "",
+    shared_owner: str | None = None,
+) -> None:
+    """Flatten the folder tree, including shared folders (mountpoints)."""
     folder_name = folder.get("name", "")
     folder_path = f"{path}/{folder_name}" if path else folder_name
+
+    # A mountpoint carries the owner; its subfolders inherit it
+    if "owner" in folder or "zid" in folder:
+        shared_owner = folder.get("owner") or shared_owner or ""
 
     folder_info = {
         "id": folder.get("id"),
@@ -669,10 +712,35 @@ def _flatten_folders(folder: dict, result: list[dict], path: str = "") -> None:
         "total_count": folder.get("n", 0),
         "view": folder.get("view", "message"),
     }
+    if shared_owner is not None:
+        folder_info["shared"] = True
+        folder_info["owner"] = shared_owner
     result.append(folder_info)
 
-    subfolders = folder.get("folder", [])
-    if not isinstance(subfolders, list):
-        subfolders = [subfolders]
-    for subfolder in subfolders:
-        _flatten_folders(subfolder, result, folder_path)
+    for subfolder in _subfolders(folder):
+        _flatten_folders(subfolder, result, folder_path, shared_owner)
+
+
+def _find_folder(folder: dict, folder_id: str) -> dict | None:
+    """Find a folder or mountpoint by ID in the folder tree.
+
+    A mountpoint also matches its remote ID ("<owner zimbraId>:<remote folder id>").
+    """
+    ids = {str(folder.get("id"))}
+    if folder.get("zid") and folder.get("rid"):
+        ids.add(f"{folder['zid']}:{folder['rid']}")
+    if folder_id in ids:
+        return folder
+    for subfolder in _subfolders(folder):
+        found = _find_folder(subfolder, folder_id)
+        if found is not None:
+            return found
+    return None
+
+
+def _collect_folder_ids(folder: dict, result: list[str]) -> None:
+    """Collect the IDs of a folder and all its descendants."""
+    if folder.get("id"):
+        result.append(str(folder["id"]))
+    for subfolder in _subfolders(folder):
+        _collect_folder_ids(subfolder, result)
