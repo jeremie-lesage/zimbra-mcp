@@ -13,6 +13,7 @@ from zimbra_mcp.tools.emails import (
     _extract_addresses,
     _extract_parts,
     _flatten_folders,
+    _format_date,
     _guess_extension,
     _html_to_text,
     _prepare_body_with_original,
@@ -464,6 +465,25 @@ class TestSendEmailToolRegistration:
         assert result["success"] is True
         assert result["message_id"] == "200"
 
+    def test_send_email_html_only(self, connected_client):
+        cfg = ZimbraConfig(url="https://z.test", user="u", password="p", enable_send=True)
+        tools = capture_tools(register_email_tools, connected_client, cfg)
+        connected_client.send_message = MagicMock(return_value={"m": {"id": "201"}})
+
+        tools["send_email"](to=["bob@test.com"], subject="Test", body_html="<p>Hello <b>Bob</b></p>")
+
+        args, kwargs = connected_client.send_message.call_args
+        assert "Hello" in args[2] and "<" not in args[2]
+        assert kwargs["body_html"] == "<p>Hello <b>Bob</b></p>"
+
+
+class TestFormatDate:
+    def test_utc_suffix(self):
+        assert _format_date("1700000000000") == "2023-11-14 22:13 UTC"
+
+    def test_invalid_value(self):
+        assert _format_date("") == ""
+
 
 class TestDownloadAttachmentTool:
     def test_normal_filename_written_inside_dir(self, email_tools, tmp_path):
@@ -604,13 +624,13 @@ class TestCreateDraftHtml:
         kwargs = client.create_draft.call_args.kwargs
         html = kwargs["body_html"]
         assert html.index("Thanks Jonathan") < html.index("<blockquote")
-        assert "<b>bold</b>" in html                      # original formatting kept
-        assert "Jonathan &lt;jonathan@customer.test&gt;" in html  # header escaped
+        assert "<b>bold</b>" in html
+        assert "Jonathan &lt;jonathan@customer.test&gt;" in html
         assert "Supplier pricing" in html
         assert "cid:" not in html and "alert" not in html and "<style" not in html
         assert "https://cdn.customer.test/banner.png" in html
         plain = client.create_draft.call_args.args[2]
-        assert "> Original plain" in plain                # plain part still quoted
+        assert "> Original plain" in plain
 
     def test_html_forward_has_no_blockquote(self, email_tools):
         tools, client = email_tools

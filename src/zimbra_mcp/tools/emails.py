@@ -80,7 +80,6 @@ _HTML_ATTRIBUTES = {
     "font": {"color", "face", "size"},
     "img": {"src", "alt", "width", "height"},
 }
-# Inline styles keep only these properties, so nothing like background-image:url(...) survives.
 _STYLE_PROPERTIES = {
     "color", "background-color", "font", "font-family", "font-size", "font-weight", "font-style",
     "text-decoration", "text-align", "text-indent", "line-height", "vertical-align", "white-space",
@@ -118,7 +117,7 @@ def _format_date(ms: Any) -> str:
     """Format a Zimbra millisecond timestamp the way the quoting header shows it."""
     from datetime import datetime, timezone
     try:
-        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     except (ValueError, TypeError):
         return str(ms or "")
 
@@ -130,8 +129,6 @@ def _prepare_html_with_original(
     reply_type: str | None,
 ) -> str:
     """Append the original message to an HTML body, keeping the original's formatting."""
-    # ponytail: fetches the original a second time (the plain-text quote fetched it too); one
-    # extra SOAP call per HTML reply. Merge the two fetches if replies ever get latency-sensitive.
     orig_msg = client.get_message(orig_msg_id).get("m", {})
     if isinstance(orig_msg, list):
         orig_msg = orig_msg[0] if orig_msg else {}
@@ -682,7 +679,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         def send_email(
             to: list[str],
             subject: str,
-            body: str,
+            body: str = "",
             cc: list[str] | None = None,
             bcc: list[str] | None = None,
             orig_msg_id: str | None = None,
@@ -702,7 +699,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
             Args:
                 to: List of primary recipients
                 subject: Email subject
-                body: Message body (plain text)
+                body: Message body as plain text (optional when body_html is given)
                 cc: List of CC recipients (optional)
                 bcc: List of BCC recipients (optional)
                 orig_msg_id: ID of the original message when replying or forwarding (optional)
