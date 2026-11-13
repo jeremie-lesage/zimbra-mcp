@@ -178,6 +178,9 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         Returns:
             List of found emails with their metadata
         """
+        if not query.strip() and not folder_id:
+            return {"success": False, "error": "Provide a query or a folder_id"}
+
         # Convert ISO dates to Zimbra format
         query = _convert_iso_dates(query)
 
@@ -700,7 +703,6 @@ def _flatten_folders(
     folder_name = folder.get("name", "")
     folder_path = f"{path}/{folder_name}" if path else folder_name
 
-    # A mountpoint carries the owner; its subfolders inherit it
     if "owner" in folder or "zid" in folder:
         shared_owner = folder.get("owner") or shared_owner or ""
 

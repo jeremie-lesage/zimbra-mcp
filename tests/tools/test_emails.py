@@ -323,6 +323,15 @@ class TestSearchEmailsInFolder:
         assert result["success"] is False
         client.search_messages.assert_not_called()
 
+    def test_empty_query_without_folder_rejected(self, email_tools):
+        tools, client = email_tools
+        client.search_messages = MagicMock()
+
+        result = tools["search_emails"]("  ")
+
+        assert result["success"] is False
+        client.search_messages.assert_not_called()
+
 
 class TestSearchEmailsTool:
     def test_basic_search(self, email_tools):
