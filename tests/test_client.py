@@ -68,7 +68,7 @@ class TestConnection:
         client.connect()
         assert client.is_connected
         assert client._token == "tok123"
-        mock_comm_cls.assert_called_once_with(client.config.url)
+        mock_comm_cls.assert_called_once_with(client.config.url, timeout=client.config.timeout)
 
     @patch("zimbra_mcp.client.Communication")
     def test_connect_two_factor_required(self, mock_comm_cls, client):
@@ -147,20 +147,49 @@ class TestRequest:
         with pytest.raises(ZimbraNotFoundError, match="no such message"):
             connected_client.request("GetMsgRequest", "urn:zimbraMail")
 
-    def test_request_session_expired_clears_token(self, connected_client):
-        mock_response = MagicMock()
-        mock_response.is_fault.return_value = True
-        mock_response.get_response.return_value = {
+    @staticmethod
+    def _expired_fault():
+        fault = MagicMock()
+        fault.is_fault.return_value = True
+        fault.get_response.return_value = {
             "Fault": {
                 "Reason": {"Text": "auth credentials have expired"},
                 "Detail": {"Error": {"Code": "service.AUTH_EXPIRED"}},
             }
         }
-        _setup_response(connected_client, mock_response)
+        return fault
 
-        with pytest.raises(ZimbraAuthError, match="re-authenticate"):
-            connected_client.request("SearchRequest", "urn:zimbraMail")
+    def test_request_session_expired_reconnects_once(self, connected_client):
+        ok = _make_ok_response("SearchResponse", {"data": "ok"})
+        connected_client._comm.send_request.side_effect = [self._expired_fault(), ok]
+
+        def fake_connect():
+            connected_client._token = "new-token"
+
+        with patch.object(connected_client, "connect", side_effect=fake_connect) as mock_connect:
+            result = connected_client.request("SearchRequest", "urn:zimbraMail")
+
+        assert result == {"data": "ok"}
+        mock_connect.assert_called_once()
+        assert connected_client._token == "new-token"
+
+    def test_request_session_expired_gives_up_after_one_retry(self, connected_client):
+        connected_client._comm.send_request.return_value = self._expired_fault()
+
+        def fake_connect():
+            connected_client._token = "new-token"
+
+        with patch.object(connected_client, "connect", side_effect=fake_connect):
+            with pytest.raises(ZimbraAuthError, match="re-authenticate"):
+                connected_client.request("SearchRequest", "urn:zimbraMail")
         assert connected_client._token is None
+
+    def test_request_session_expired_two_factor_account(self, connected_client):
+        connected_client._comm.send_request.return_value = self._expired_fault()
+
+        with patch.object(connected_client, "connect", side_effect=ZimbraTwoFactorRequiredError("2FA")):
+            with pytest.raises(ZimbraTwoFactorRequiredError):
+                connected_client.request("SearchRequest", "urn:zimbraMail")
 
     def test_request_fault_operation_error(self, connected_client):
         mock_response = MagicMock()
@@ -396,7 +425,7 @@ class TestGetAttachmentContent:
         connected_client._token = "secret-token"
         cm, _ = _mock_urlopen_response()
 
-        with patch("urllib.request.urlopen", return_value=cm) as mock_open, \
+        with patch("zimbra_mcp.client._attachment_opener.open", return_value=cm) as mock_open, \
              patch("urllib.request.Request") as mock_req:
             content, filename, content_type = connected_client.get_attachment_content("5", "2")
 
@@ -422,7 +451,7 @@ class TestGetAttachmentContent:
             "https://zimbra.test",
         ):
             connected_client.config.url = url
-            with patch("urllib.request.urlopen", return_value=cm), \
+            with patch("zimbra_mcp.client._attachment_opener.open", return_value=cm), \
                  patch("urllib.request.Request") as mock_req:
                 connected_client.get_attachment_content("5", "2")
             request_url = mock_req.call_args[0][0]
@@ -430,25 +459,31 @@ class TestGetAttachmentContent:
             assert "//service/home" not in request_url, request_url
 
     def test_rejects_oversized_via_content_length(self, connected_client):
-        from zimbra_mcp.client import MAX_ATTACHMENT_SIZE_BYTES
-
-        cm, _ = _mock_urlopen_response(
-            headers={"Content-Length": str(MAX_ATTACHMENT_SIZE_BYTES + 1)}
-        )
-        with patch("urllib.request.urlopen", return_value=cm), \
+        connected_client.config.max_attachment_bytes = 10
+        cm, _ = _mock_urlopen_response(headers={"Content-Length": "11"})
+        with patch("zimbra_mcp.client._attachment_opener.open", return_value=cm), \
              patch("urllib.request.Request"):
             with pytest.raises(ZimbraOperationError, match="too large"):
                 connected_client.get_attachment_content("5", "2")
 
     def test_rejects_oversized_when_body_exceeds_cap(self, connected_client):
-        from zimbra_mcp.client import MAX_ATTACHMENT_SIZE_BYTES
-
-        cm, resp = _mock_urlopen_response(content=b"x" * (MAX_ATTACHMENT_SIZE_BYTES + 1))
-        with patch("urllib.request.urlopen", return_value=cm), \
+        connected_client.config.max_attachment_bytes = 10
+        cm, resp = _mock_urlopen_response(content=b"x" * 11)
+        with patch("zimbra_mcp.client._attachment_opener.open", return_value=cm), \
              patch("urllib.request.Request"):
             with pytest.raises(ZimbraOperationError, match="too large"):
                 connected_client.get_attachment_content("5", "2")
-        resp.read.assert_called_once_with(MAX_ATTACHMENT_SIZE_BYTES + 1)
+        resp.read.assert_called_once_with(11)
+
+    def test_redirects_are_refused(self):
+        import urllib.error
+        import urllib.request
+
+        from zimbra_mcp.client import _NoRedirectHandler
+
+        req = urllib.request.Request("https://zimbra.test/x", headers={"Cookie": "ZM_AUTH_TOKEN=t"})
+        with pytest.raises(urllib.error.HTTPError, match="Redirect refused"):
+            _NoRedirectHandler().redirect_request(req, None, 302, "Found", {}, "https://evil.test/")
 
 
 # --- Tag methods ---
@@ -622,6 +657,14 @@ class TestDeleteContacts:
         connected_client.delete_contacts(["100", "101"])
         params = _get_request_params(connected_client)
         assert params["action"]["id"] == "100,101"
+        assert params["action"]["op"] == "trash"
+
+    def test_hard_delete(self, connected_client):
+        resp = _make_ok_response("ContactActionResponse", {"action": {}})
+        _setup_response(connected_client, resp)
+
+        connected_client.delete_contacts(["100"], hard_delete=True)
+        params = _get_request_params(connected_client)
         assert params["action"]["op"] == "delete"
 
 

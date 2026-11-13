@@ -269,19 +269,32 @@ def register_contact_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         }
 
     @mcp.tool()
-    def delete_contact(contact_ids: list[str]) -> dict[str, Any]:
+    def delete_contact(contact_ids: list[str], hard_delete: bool = False) -> dict[str, Any]:
         """Delete one or more contacts.
+
+        By default, contacts are moved to Trash (soft delete).
+        Permanent deletion is refused unless the server was started with
+        ZIMBRA_ENABLE_HARD_DELETE=true. Even then, only set hard_delete=True
+        if the user explicitly asks for permanent deletion.
 
         Args:
             contact_ids: List of contact IDs to delete
+            hard_delete: If True, permanently delete (ONLY when explicitly requested by user); otherwise move to Trash (default: False)
 
         Returns:
             Deletion confirmation
         """
-        client.delete_contacts(contact_ids)
+        if hard_delete and not client.config.enable_hard_delete:
+            return {
+                "success": False,
+                "error": "Permanent deletion is disabled (ZIMBRA_ENABLE_HARD_DELETE). "
+                "Use hard_delete=False to move the contacts to Trash.",
+            }
+        client.delete_contacts(contact_ids, hard_delete=hard_delete)
 
         return {
             "success": True,
             "deleted_count": len(contact_ids),
             "deleted_ids": contact_ids,
+            "hard_delete": hard_delete,
         }

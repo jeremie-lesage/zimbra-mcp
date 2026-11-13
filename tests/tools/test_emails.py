@@ -17,6 +17,7 @@ from zimbra_mcp.tools.emails import (
     _guess_extension,
     _html_to_text,
     _prepare_body_with_original,
+    _safe_filename,
     register_email_tools,
 )
 
@@ -188,12 +189,22 @@ class TestDeleteEmailsTool:
 
     def test_hard_delete(self, email_tools):
         tools, client = email_tools
+        client.config.enable_hard_delete = True
         client.delete_messages = MagicMock()
 
         result = tools["delete_emails"](["5"], hard_delete=True)
 
         client.delete_messages.assert_called_once_with(["5"], hard_delete=True)
         assert result["hard_delete"] is True
+
+    def test_hard_delete_refused_by_default(self, email_tools):
+        tools, client = email_tools
+        client.delete_messages = MagicMock()
+
+        result = tools["delete_emails"](["5"], hard_delete=True)
+
+        assert result["success"] is False
+        client.delete_messages.assert_not_called()
 
 
 class TestSearchFolderTool:
@@ -538,6 +549,81 @@ class TestDownloadAttachmentTool:
         assert result["success"] is True
         assert result["filename"] == "attachment_99_2_1.pdf"
         assert (tmp_path / "attachment_99_2_1.pdf").read_bytes() == b"y"
+
+    def test_existing_file_not_overwritten(self, email_tools, tmp_path):
+        tools, client = email_tools
+        (tmp_path / "report.pdf").write_bytes(b"old")
+        client.get_attachment_content = MagicMock(
+            return_value=(b"new", "report.pdf", "application/pdf")
+        )
+
+        result = tools["download_attachment"]("1", "2", str(tmp_path))
+
+        assert result["filename"] == "report (1).pdf"
+        assert (tmp_path / "report.pdf").read_bytes() == b"old"
+        assert (tmp_path / "report (1).pdf").read_bytes() == b"new"
+
+    def test_save_path_required_without_download_dir(self, email_tools):
+        tools, client = email_tools
+        client.get_attachment_content = MagicMock()
+
+        result = tools["download_attachment"]("1", "2")
+
+        assert result["success"] is False
+        client.get_attachment_content.assert_not_called()
+
+    def test_download_dir_is_default_target(self, email_tools, tmp_path):
+        tools, client = email_tools
+        client.config.download_dir = tmp_path
+        client.get_attachment_content = MagicMock(
+            return_value=(b"data", "report.pdf", "application/pdf")
+        )
+
+        result = tools["download_attachment"]("1", "2")
+
+        assert result["success"] is True
+        assert (tmp_path / "report.pdf").read_bytes() == b"data"
+
+    def test_download_dir_accepts_subdirectory(self, email_tools, tmp_path):
+        tools, client = email_tools
+        client.config.download_dir = tmp_path
+        (tmp_path / "sub").mkdir()
+        client.get_attachment_content = MagicMock(
+            return_value=(b"data", "report.pdf", "application/pdf")
+        )
+
+        result = tools["download_attachment"]("1", "2", "sub")
+
+        assert result["success"] is True
+        assert (tmp_path / "sub" / "report.pdf").read_bytes() == b"data"
+
+    def test_download_dir_refuses_path_outside(self, email_tools, tmp_path):
+        tools, client = email_tools
+        root = tmp_path / "downloads"
+        root.mkdir()
+        client.config.download_dir = root
+        client.get_attachment_content = MagicMock()
+
+        for save_path in ("..", str(tmp_path), "/etc"):
+            result = tools["download_attachment"]("1", "2", save_path)
+            assert result["success"] is False, save_path
+        client.get_attachment_content.assert_not_called()
+
+
+class TestSafeFilename:
+    def test_strips_path(self):
+        assert _safe_filename("..\\..\\evil.exe") == "evil.exe"
+        assert _safe_filename("../../.bashrc") == "bashrc"
+
+    def test_replaces_control_and_reserved_chars(self):
+        assert _safe_filename('a\x00b<c>:"d|e?f*.txt') == "a_b_c___d_e_f_.txt"
+
+    def test_windows_reserved_names(self):
+        assert _safe_filename("CON.txt") == "_CON.txt"
+
+    def test_empty_when_nothing_left(self):
+        assert _safe_filename("..") == ""
+        assert _safe_filename("") == ""
 
 
 # --- HTML bodies ---

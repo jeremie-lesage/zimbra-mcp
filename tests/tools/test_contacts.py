@@ -157,4 +157,21 @@ class TestDeleteContact:
         result = tools["delete_contact"](["100", "101"])
         assert result["success"] is True
         assert result["deleted_count"] == 2
-        client.delete_contacts.assert_called_once_with(["100", "101"])
+        client.delete_contacts.assert_called_once_with(["100", "101"], hard_delete=False)
+
+    def test_hard_delete_refused_by_default(self, contact_tools):
+        tools, client = contact_tools
+        client.delete_contacts = MagicMock()
+
+        result = tools["delete_contact"](["100"], hard_delete=True)
+        assert result["success"] is False
+        client.delete_contacts.assert_not_called()
+
+    def test_hard_delete_enabled(self, contact_tools):
+        tools, client = contact_tools
+        client.config.enable_hard_delete = True
+        client.delete_contacts = MagicMock()
+
+        result = tools["delete_contact"](["100"], hard_delete=True)
+        assert result["success"] is True
+        client.delete_contacts.assert_called_once_with(["100"], hard_delete=True)

@@ -524,8 +524,9 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         """Delete emails.
 
         By default, emails are moved to Trash (soft delete).
-        IMPORTANT: Only set hard_delete=True if the user explicitly asks for
-        permanent deletion. Never use hard_delete on your own initiative.
+        Permanent deletion is refused unless the server was started with
+        ZIMBRA_ENABLE_HARD_DELETE=true. Even then, only set hard_delete=True
+        if the user explicitly asks for permanent deletion.
 
         Args:
             msg_ids: List of email IDs to delete
@@ -534,6 +535,12 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         Returns:
             Deletion confirmation
         """
+        if hard_delete and not client.config.enable_hard_delete:
+            return {
+                "success": False,
+                "error": "Permanent deletion is disabled (ZIMBRA_ENABLE_HARD_DELETE). "
+                "Use hard_delete=False to move the emails to Trash.",
+            }
         client.delete_messages(msg_ids, hard_delete=hard_delete)
         return {
             "success": True,
@@ -619,55 +626,59 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
     def download_attachment(
         msg_id: str,
         part_id: str,
-        save_path: str,
+        save_path: str | None = None,
         filename: str | None = None,
     ) -> dict[str, Any]:
         """Download an email attachment and save it to a file.
 
+        When the server sets ZIMBRA_DOWNLOAD_DIR, files can only be written
+        inside that directory and save_path is optional. Existing files are
+        never overwritten: a numeric suffix is added instead.
+
         Args:
             msg_id: Email ID (obtained via search_emails or get_email)
             part_id: Attachment part ID (obtained from get_email attachments list)
-            save_path: Directory where to save the file (must exist)
+            save_path: Directory where to save the file (must exist). Required unless
+                ZIMBRA_DOWNLOAD_DIR is set, in which case it defaults to that directory
+                and must stay inside it.
             filename: Optional custom filename (if not provided, uses original filename)
 
         Returns:
             Information about the downloaded file (path, size, content_type)
         """
-        # Validate save_path
-        save_dir = Path(save_path).expanduser().resolve()
-        if not save_dir.exists():
-            return {
-                "success": False,
-                "error": f"Directory does not exist: {save_path}",
-            }
+        root = client.config.download_dir
+        if root is None:
+            if not save_path:
+                return {"success": False, "error": "save_path is required"}
+            save_dir = Path(save_path).expanduser().resolve()
+        else:
+            save_dir = _resolve_inside(root, save_path)
+            if save_dir is None:
+                return {
+                    "success": False,
+                    "error": f"save_path must be inside the download directory: {root}",
+                }
         if not save_dir.is_dir():
             return {
                 "success": False,
-                "error": f"Path is not a directory: {save_path}",
+                "error": f"Directory does not exist: {save_dir}",
             }
 
         # Download attachment content
         content, original_filename, content_type = client.get_attachment_content(msg_id, part_id)
 
         # Determine final filename
-        final_filename = Path(filename or original_filename or "").name
-        if not final_filename or final_filename in (".", "..") or final_filename == "attachment":
+        final_filename = _safe_filename(filename or "") or _safe_filename(original_filename or "")
+        if not final_filename or final_filename == "attachment":
             # Fallback: use part_id and guess extension from content_type
             ext = _guess_extension(content_type)
-            final_filename = f"attachment_{msg_id}_{part_id.replace('.', '_')}{ext}"
+            final_filename = _safe_filename(f"attachment_{msg_id}_{part_id.replace('.', '_')}{ext}")
 
-        # Write file
-        file_path = (save_dir / final_filename).resolve()
-        if save_dir != file_path.parent:
-            return {
-                "success": False,
-                "error": "Invalid filename: resolved outside the target directory",
-            }
-        file_path.write_bytes(content)
+        file_path = _write_new_file(save_dir, final_filename, content)
 
         return {
             "success": True,
-            "filename": final_filename,
+            "filename": file_path.name,
             "path": str(file_path),
             "size": len(content),
             "content_type": content_type,
@@ -734,6 +745,48 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
                 "subject": subject,
                 "body_preview": full_body[:200] + "..." if len(full_body) > 200 else full_body,
             }
+
+
+_WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10)}
+
+
+def _safe_filename(name: str) -> str:
+    """Reduce an untrusted filename to a safe basename (no path, no control chars).
+
+    Returns an empty string when nothing usable is left.
+    """
+    name = name.replace("\\", "/").split("/")[-1]
+    name = re.sub(r'[\x00-\x1f\x7f<>:"|?*]', "_", name)
+    name = name.strip().strip(".").strip()
+    if not name:
+        return ""
+    if name.split(".")[0].upper() in _WINDOWS_RESERVED:
+        name = f"_{name}"
+    return name[:200]
+
+
+def _resolve_inside(root: Path, sub_path: str | None) -> Path | None:
+    """Resolve sub_path against root; return None if it escapes root."""
+    candidate = (root / Path(sub_path).expanduser()).resolve() if sub_path else root
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _write_new_file(directory: Path, filename: str, content: bytes) -> Path:
+    """Write content to a new file, adding a suffix instead of overwriting."""
+    stem, suffix = os.path.splitext(filename)
+    for i in range(1000):
+        candidate = directory / (filename if i == 0 else f"{stem} ({i}){suffix}")
+        try:
+            with open(candidate, "xb") as f:
+                f.write(content)
+            return candidate
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"Too many files named {filename} in {directory}")
 
 
 def _guess_extension(content_type: str) -> str:

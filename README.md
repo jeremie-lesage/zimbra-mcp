@@ -37,8 +37,12 @@ ZIMBRA_ENABLE_SEND=false
 | `ZIMBRA_URL` | Zimbra SOAP endpoint URL | (required) |
 | `ZIMBRA_USER` | Zimbra account email | (required) |
 | `ZIMBRA_PASSWORD` | Zimbra account password | (required) |
-| `ZIMBRA_TIMEOUT` | Request timeout in seconds | `30` |
+| `ZIMBRA_TIMEOUT` | Request timeout in seconds (SOAP, auth and downloads) | `30` |
 | `ZIMBRA_ENABLE_SEND` | Enable `send_email` tool (`true`/`1`/`yes`) | `false` |
+| `ZIMBRA_ENABLE_HARD_DELETE` | Allow permanent deletion of emails/contacts (`hard_delete=True`) | `false` |
+| `ZIMBRA_DOWNLOAD_DIR` | When set, the only directory `download_attachment` may write into | (unset) |
+| `ZIMBRA_MAX_ATTACHMENT_MB` | Maximum attachment size downloaded | `50` |
+| `ZIMBRA_ALLOW_INSECURE_HTTP` | Accept a plain `http://` `ZIMBRA_URL` (credentials sent unencrypted) | `false` |
 
 ## Usage
 
@@ -62,12 +66,12 @@ mcp dev src/zimbra_mcp/server.py
 |------|-------------|
 | `search_emails` | Search with Zimbra syntax (in:inbox, from:, tag:, etc.), optionally restricted to a folder (`folder_id`) and its subfolders (`include_subfolders`), shared folders included |
 | `get_email` | Retrieve an email by ID with full body |
-| `download_attachment` | Download an attachment to a local file |
+| `download_attachment` | Download an attachment to a local file (never overwrites, confined to `ZIMBRA_DOWNLOAD_DIR` when set) |
 | `list_folders` | List all mail folders, including shared folders and their subfolders |
 | `search_folder` | Search for a folder by name or path (case-insensitive partial match) |
 | `move_emails` | Move emails to a folder |
 | `mark_as_read` | Mark emails as read or unread |
-| `delete_emails` | Delete emails (soft delete to Trash, or hard delete) |
+| `delete_emails` | Delete emails (Trash by default; hard delete requires `ZIMBRA_ENABLE_HARD_DELETE=true`) |
 | `create_draft` | Create or update a draft (plain text or HTML), with optional reply/forward support |
 | `send_email` | Send an email directly (opt-in, requires `ZIMBRA_ENABLE_SEND=true`) |
 
@@ -131,7 +135,7 @@ Examples:
 | `get_contact` | Retrieve a contact by ID |
 | `create_contact` | Create a contact (name, email, phone, company, etc.) |
 | `update_contact` | Update specific fields of an existing contact |
-| `delete_contact` | Delete one or more contacts |
+| `delete_contact` | Delete contacts (Trash by default; hard delete requires `ZIMBRA_ENABLE_HARD_DELETE=true`) |
 
 ### Tags
 
@@ -153,6 +157,18 @@ Available colors: blue, cyan, green, purple, red, yellow, pink, gray, orange
 | `get_event_details` | Full details of an event |
 | `create_event` | Create an event |
 | `get_free_busy` | User availability |
+
+## Security
+
+The content of emails is controlled by their senders. A malicious email can contain instructions aimed at the LLM (*prompt injection*), so the server limits what a manipulated model can do:
+
+- **No sending by default**: `send_email` only exists when `ZIMBRA_ENABLE_SEND=true`. Drafts are always safe to create.
+- **No irreversible deletion by default**: `hard_delete=True` is refused unless `ZIMBRA_ENABLE_HARD_DELETE=true`; emails and contacts go to the Trash.
+- **File writes**: `download_attachment` strips any path from the file name (`../../.bashrc` becomes `bashrc`), never overwrites an existing file and caps the size (`ZIMBRA_MAX_ATTACHMENT_MB`). Set `ZIMBRA_DOWNLOAD_DIR` to confine writes to a single directory.
+- **Credentials**: HTTPS is required unless explicitly overridden; the auth token is sent as a cookie (never in a URL that could end up in proxy logs), redirects are refused so it cannot be forwarded to another host; the password is never included in `repr()`.
+- **Timeouts** on every request, so a hung server cannot block the MCP client forever.
+
+Keep `.env` out of version control (it is in `.gitignore`) and prefer an application-specific password if your Zimbra supports it.
 
 ## Development
 

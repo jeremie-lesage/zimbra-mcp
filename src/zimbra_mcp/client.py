@@ -1,5 +1,7 @@
 """Zimbra SOAP Client."""
 
+import urllib.error
+import urllib.request
 from typing import Any
 
 from pythonzimbra.communication import Communication
@@ -13,7 +15,15 @@ from zimbra_mcp.errors import (
     ZimbraTwoFactorRequiredError,
 )
 
-MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so the auth cookie is never forwarded to another URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f"Redirect refused ({msg})", headers, fp)
+
+
+_attachment_opener = urllib.request.build_opener(_NoRedirectHandler)
 
 
 def _body_part(body: str, body_html: str | None) -> dict[str, Any]:
@@ -67,7 +77,7 @@ class ZimbraClient:
         """
         try:
             if self._comm is None:
-                self._comm = Communication(self.config.url)
+                self._comm = Communication(self.config.url, timeout=self.config.timeout)
 
             request = self._comm.gen_request()
             params: dict[str, Any] = {
@@ -141,6 +151,13 @@ class ZimbraClient:
         """
         self._ensure_connected()
 
+        try:
+            return self._send(request_name, namespace, params)
+        except ZimbraAuthError:
+            self.connect()
+            return self._send(request_name, namespace, params)
+
+    def _send(self, request_name: str, namespace: str, params: dict[str, Any] | None) -> dict[str, Any]:
         if self._comm is None:
             raise ZimbraConnectionError("Client not initialized")
 
@@ -644,11 +661,12 @@ class ZimbraClient:
         }
         return self.request("ModifyContactRequest", "urn:zimbraMail", params)
 
-    def delete_contacts(self, contact_ids: list[str]) -> dict[str, Any]:
+    def delete_contacts(self, contact_ids: list[str], hard_delete: bool = False) -> dict[str, Any]:
         """Delete contacts.
 
         Args:
             contact_ids: List of contact IDs
+            hard_delete: If True, permanently delete; otherwise move to Trash
 
         Returns:
             Operation result
@@ -656,7 +674,7 @@ class ZimbraClient:
         params = {
             "action": {
                 "id": ",".join(contact_ids),
-                "op": "delete",
+                "op": "delete" if hard_delete else "trash",
             }
         }
         return self.request("ContactActionRequest", "urn:zimbraMail", params)
@@ -671,33 +689,30 @@ class ZimbraClient:
         Returns:
             Tuple of (content_bytes, filename, content_type)
         """
-        import urllib.request
-        import urllib.error
-        from urllib.parse import urlencode, urlsplit
+        from urllib.parse import urlencode
 
         self._ensure_connected()
 
-        parts = urlsplit(self.config.url)
-        base_url = f"{parts.scheme}://{parts.netloc}"
         params = urlencode({
             "id": msg_id,
             "part": part_id,
             "auth": "co",
         })
-        url = f"{base_url}/service/home/~/?{params}"
+        url = f"{self.config.base_url}/service/home/~/?{params}"
+        max_bytes = self.config.max_attachment_bytes
 
         try:
             req = urllib.request.Request(url, headers={"Cookie": f"ZM_AUTH_TOKEN={self._token}"})
-            with urllib.request.urlopen(req, timeout=self.config.timeout) as response:
+            with _attachment_opener.open(req, timeout=self.config.timeout) as response:
                 declared = response.headers.get("Content-Length")
-                if declared is not None and declared.isdigit() and int(declared) > MAX_ATTACHMENT_SIZE_BYTES:
+                if declared is not None and declared.isdigit() and int(declared) > max_bytes:
                     raise ZimbraOperationError(
-                        f"Attachment too large: {int(declared)} bytes exceeds limit of {MAX_ATTACHMENT_SIZE_BYTES}"
+                        f"Attachment too large: {int(declared)} bytes exceeds limit of {max_bytes}"
                     )
-                content = response.read(MAX_ATTACHMENT_SIZE_BYTES + 1)
-                if len(content) > MAX_ATTACHMENT_SIZE_BYTES:
+                content = response.read(max_bytes + 1)
+                if len(content) > max_bytes:
                     raise ZimbraOperationError(
-                        f"Attachment too large: exceeds limit of {MAX_ATTACHMENT_SIZE_BYTES} bytes"
+                        f"Attachment too large: exceeds limit of {max_bytes} bytes"
                     )
                 content_type = response.headers.get("Content-Type", "application/octet-stream")
 
