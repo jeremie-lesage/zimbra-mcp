@@ -230,6 +230,7 @@ class TestSearchMessages:
         assert params["offset"] == 5
         assert params["types"] == "message"
         assert "fetch" not in params
+        assert params["recip"] == 2
 
 
 class TestGetMessage:
