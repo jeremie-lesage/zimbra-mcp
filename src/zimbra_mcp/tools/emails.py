@@ -361,7 +361,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
                 "size": msg.get("s"),
                 "folder": msg.get("l"),
                 "flags": msg.get("f", ""),
-                "tags": msg.get("t", "").split(",") if msg.get("t") else [],
+                "tags": _tag_names(msg),
                 "has_attachment": "a" in msg.get("f", ""),
                 "is_unread": "u" in msg.get("f", ""),
                 "is_flagged": "f" in msg.get("f", ""),
@@ -423,7 +423,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
             "size": msg.get("s"),
             "folder": msg.get("l"),
             "flags": msg.get("f", ""),
-            "tags": msg.get("t", "").split(",") if msg.get("t") else [],
+            "tags": _tag_names(msg),
             "body": body_parts,
             "attachments": attachments,
         }
@@ -813,6 +813,14 @@ def _guess_extension(content_type: str) -> str:
         "application/vnd.ms-excel": ".xls",
     }
     return extensions.get(content_type.split(";")[0].strip(), "")
+
+
+def _tag_names(msg: dict) -> list[str]:
+    """Return the tag names of a message, or its tag IDs if the server sends no names."""
+    tags = msg.get("tn") or msg.get("t")
+    if not tags:
+        return []
+    return str(tags).split(",")
 
 
 def _extract_address(addresses: list[dict], addr_type: str) -> str | None:

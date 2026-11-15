@@ -18,11 +18,23 @@ from zimbra_mcp.tools.emails import (
     _html_to_text,
     _prepare_body_with_original,
     _safe_filename,
+    _tag_names,
     register_email_tools,
 )
 
 
 # --- Helper function tests ---
+
+
+class TestTagNames:
+    def test_names_preferred_over_ids(self):
+        assert _tag_names({"t": "667920,22118", "tn": "Administratif,A faire"}) == ["Administratif", "A faire"]
+
+    def test_falls_back_to_ids(self):
+        assert _tag_names({"t": "667920"}) == ["667920"]
+
+    def test_no_tags(self):
+        assert _tag_names({}) == []
 
 
 class TestConvertIsoDates:
