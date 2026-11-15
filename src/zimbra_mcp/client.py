@@ -215,7 +215,6 @@ class ZimbraClient:
             "limit": limit,
             "offset": offset,
             "types": types,
-            "fetch": "all",
         }
         return self.request("SearchRequest", "urn:zimbraMail", params)
 
