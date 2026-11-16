@@ -11,6 +11,7 @@ from zimbra_mcp.errors import ZimbraNotFoundError
 from zimbra_mcp.tools.filters import (
     _build_actions,
     _build_tests,
+    _single_condition,
     _summarize_rule,
     register_filter_tools,
 )
@@ -72,7 +73,10 @@ class TestRegistration:
 
     def test_write_tools_when_enabled(self, connected_client):
         tools = capture_tools(register_filter_tools, connected_client, _enabled())
-        assert set(tools) == {"list_filters", "add_filter", "update_filter", "delete_filter"}
+        assert set(tools) == {
+            "list_filters", "add_filter", "update_filter", "delete_filter",
+            "add_filter_condition", "remove_filter_condition",
+        }
 
     def test_env_flag(self, monkeypatch):
         monkeypatch.setenv("ZIMBRA_URL", "https://z.test")
@@ -246,6 +250,86 @@ class TestUpdateFilter:
     def test_unknown_filter(self, filter_tools):
         tools, client = filter_tools
         assert tools["update_filter"](name="Nope", active=False)["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+
+class TestSingleCondition:
+    def test_kinds(self):
+        assert _single_condition("bob@a.com", None, None, None) == (
+            "addressTest", {"header": "from", "part": "all", "stringComparison": "contains", "value": "bob@a.com"}
+        )
+        assert _single_condition(None, " a.com ", None, None)[1]["part"] == "domain"
+        assert _single_condition(None, None, None, "l.a.com")[1]["header"] == "List-Id"
+
+    def test_exactly_one(self):
+        assert isinstance(_single_condition(None, None, None, None), str)
+        assert isinstance(_single_condition("a", None, "b", None), str)
+
+
+class TestAddFilterCondition:
+    def test_appends_to_existing_conditions(self, filter_tools):
+        tools, client = filter_tools
+        result = tools["add_filter_condition"](name="Spam", sender_domain="spammer.com")
+        assert result["success"] is True
+        assert result["conditions_count"] == 3
+        written = _written(client)
+        block = written[0]["filterTests"][0]
+        assert block["headerTest"] == COMPLEX_RULE["filterTests"][0]["headerTest"]
+        assert block["bodyTest"] == COMPLEX_RULE["filterTests"][0]["bodyTest"]
+        assert block["addressTest"] == [{
+            "index": 2, "header": "from", "part": "domain", "stringComparison": "contains", "value": "spammer.com",
+        }]
+        assert block["condition"] == "anyof"
+        assert written[0]["filterActions"] == COMPLEX_RULE["filterActions"]
+        assert written[1] == NEWS_RULE
+
+    def test_does_not_mutate_read_rules(self, filter_tools):
+        tools, client = filter_tools
+        rules = client.get_filter_rules.return_value
+        tools["add_filter_condition"](name="News", subject="promo")
+        assert rules[1] == NEWS_RULE
+
+    def test_duplicate_is_refused(self, filter_tools):
+        tools, client = filter_tools
+        result = tools["add_filter_condition"](name="News", sender="NEWS@a.com")
+        assert result["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+    def test_needs_exactly_one_condition(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["add_filter_condition"](name="News", sender="a", subject="b")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+    def test_unknown_filter(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["add_filter_condition"](name="Nope", sender="a")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+
+class TestRemoveFilterCondition:
+    def test_removes_only_that_condition(self, filter_tools):
+        tools, client = filter_tools
+        result = tools["remove_filter_condition"](name="Spam", list_id="nope")
+        assert result["success"] is False
+        tools["add_filter_condition"](name="News", sender="other@a.com")
+        client.get_filter_rules.return_value = _written(client)
+        result = tools["remove_filter_condition"](name="News", sender="News@A.com")
+        assert result["success"] is True
+        assert result["conditions_count"] == 1
+        block = _written(client)[1]["filterTests"][0]
+        assert [t["value"] for t in block["addressTest"]] == ["other@a.com"]
+        assert _written(client)[0] == COMPLEX_RULE
+
+    def test_part_must_match(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["remove_filter_condition"](name="News", sender_domain="news@a.com")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+    def test_last_condition_is_kept(self, filter_tools):
+        tools, client = filter_tools
+        result = tools["remove_filter_condition"](name="News", sender="news@a.com")
+        assert result["success"] is False
+        assert "delete_filter" in result["error"]
         client.modify_filter_rules.assert_not_called()
 
 

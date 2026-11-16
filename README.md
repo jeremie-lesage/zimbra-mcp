@@ -171,8 +171,10 @@ Available colors: blue, cyan, green, purple, red, yellow, pink, gray, orange
 | `add_filter` | Add a filter at the end of the list (opt-in, requires `ZIMBRA_ENABLE_FILTERS=true`) |
 | `update_filter` | Rename, enable/disable, or replace the conditions or actions of a filter (opt-in) |
 | `delete_filter` | Delete a filter (opt-in) |
+| `add_filter_condition` | Add one condition to a filter, keeping the others (opt-in) |
+| `remove_filter_condition` | Remove one condition from a filter, keeping the others (opt-in) |
 
-Conditions: sender, subject, `List-Id` header (all "contains"), matched with `all` or `any`. Actions: move to a folder, tag, mark as read, move to the Trash, stop processing the next filters. Filters are identified by their name.
+Conditions: sender, sender domain (`add_filter_condition` and `remove_filter_condition` only), subject, `List-Id` header (all "contains"), matched with `all` or `any`. Actions: move to a folder, tag, mark as read, move to the Trash, stop processing the next filters. Filters are identified by their name.
 
 Zimbra only accepts the whole filter list on write: each write tool reads the list, changes one filter and sends the list back, leaving the other filters untouched, including conditions and actions these tools cannot create. A change made in the web client between that read and that write is lost.
 
