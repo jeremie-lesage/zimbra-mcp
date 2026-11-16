@@ -243,6 +243,53 @@ class TestCreateEvent:
         assert result["success"] is True
         assert result["all_day"] is True
 
+    def test_attendees_without_invitations(self, cal_tools):
+        tools, client = cal_tools
+        client.create_appointment = MagicMock(return_value={"calItemId": "703"})
+
+        result = tools["create_event"](
+            subject="Meeting",
+            start_datetime="2024-01-15 12:00",
+            end_datetime="2024-01-15 13:00",
+            attendees=["alice@test.com"],
+        )
+        assert result["success"] is True
+        assert result["invitations_sent"] is False
+        assert "warning" in result
+        assert client.create_appointment.call_args.kwargs["send_invitations"] is False
+
+    def test_send_invitations_refused_when_send_disabled(self, cal_tools):
+        tools, client = cal_tools
+        client.config.enable_send = False
+        client.create_appointment = MagicMock()
+
+        result = tools["create_event"](
+            subject="Meeting",
+            start_datetime="2024-01-15 12:00",
+            end_datetime="2024-01-15 13:00",
+            attendees=["alice@test.com"],
+            send_invitations=True,
+        )
+        assert result["success"] is False
+        assert "ZIMBRA_ENABLE_SEND" in result["error"]
+        client.create_appointment.assert_not_called()
+
+    def test_send_invitations(self, cal_tools):
+        tools, client = cal_tools
+        client.config.enable_send = True
+        client.create_appointment = MagicMock(return_value={"calItemId": "704"})
+
+        result = tools["create_event"](
+            subject="Meeting",
+            start_datetime="2024-01-15 12:00",
+            end_datetime="2024-01-15 13:00",
+            attendees=["alice@test.com"],
+            send_invitations=True,
+        )
+        assert result["invitations_sent"] is True
+        assert "warning" not in result
+        assert client.create_appointment.call_args.kwargs["send_invitations"] is True
+
     def test_create_private_event(self, cal_tools):
         tools, client = cal_tools
         client.create_appointment = MagicMock(return_value={"calItemId": "702"})

@@ -567,6 +567,7 @@ class ZimbraClient:
         attendees: list[str] | None = None,
         all_day: bool = False,
         private: bool = False,
+        send_invitations: bool = False,
     ) -> dict[str, Any]:
         """Create a calendar event.
 
@@ -576,9 +577,10 @@ class ZimbraClient:
             end_time: End timestamp (ms)
             location: Location
             description: Description
-            attendees: List of attendees
+            attendees: List of attendees, the authenticated user being the organizer
             all_day: All-day event
             private: Private event (class PRI)
+            send_invitations: Email the invitation to the attendees
 
         Returns:
             Information about the created event
@@ -608,7 +610,8 @@ class ZimbraClient:
             inv["comp"]["loc"] = location
 
         if attendees:
-            inv["comp"]["at"] = [{"a": addr, "role": "REQ"} for addr in attendees]
+            inv["comp"]["or"] = {"a": self.config.user}
+            inv["comp"]["at"] = [{"a": addr, "role": "REQ", "ptst": "NE", "rsvp": "1"} for addr in attendees]
 
         if all_day:
             inv["comp"]["allDay"] = "1"
@@ -619,6 +622,8 @@ class ZimbraClient:
         params = {"m": {"inv": inv, "su": subject}}
         if description:
             params["m"]["mp"] = _body_part(description, None)
+        if attendees and send_invitations:
+            params["m"]["e"] = [{"a": addr, "t": "t"} for addr in attendees]
         return self.request("CreateAppointmentRequest", "urn:zimbraMail", params)
 
     def modify_appointment(

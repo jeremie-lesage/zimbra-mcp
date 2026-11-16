@@ -162,6 +162,7 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         attendees: list[str] | None = None,
         all_day: bool = False,
         private: bool = False,
+        send_invitations: bool = False,
     ) -> dict[str, Any]:
         """Create a calendar event.
 
@@ -171,13 +172,20 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             end_datetime: End date/time in "YYYY-MM-DD HH:MM" or "YYYY-MM-DD" format for all-day events
             location: Event location (optional)
             description: Event description (optional)
-            attendees: List of attendee emails (optional)
+            attendees: List of attendee emails, you being the organizer (optional)
             all_day: All-day event (default: False)
             private: Private event, its details hidden from people who share the calendar (default: False)
+            send_invitations: Email the invitation to the attendees; requires ZIMBRA_ENABLE_SEND (default: False)
 
         Returns:
             Information about the created event
         """
+        if send_invitations and not client.config.enable_send:
+            return {
+                "success": False,
+                "error": "Sending invitations is disabled (set ZIMBRA_ENABLE_SEND=true to enable it)",
+            }
+
         start_dt = _parse_input_datetime(start_datetime, all_day)
         end_dt = _parse_input_datetime(end_datetime, all_day)
 
@@ -193,9 +201,11 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             attendees=attendees,
             all_day=all_day,
             private=private,
+            send_invitations=send_invitations,
         )
 
-        return {
+        invitations_sent = bool(attendees) and send_invitations
+        response = {
             "success": True,
             "event_id": result.get("calItemId") or result.get("apptId"),
             "invite_id": result.get("invId"),
@@ -207,6 +217,11 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "all_day": all_day,
             "private": private,
         }
+        if attendees:
+            response["invitations_sent"] = invitations_sent
+        if attendees and not invitations_sent:
+            response["warning"] = "Attendees were recorded but not invited (send_invitations=True to email them)"
+        return response
 
     @mcp.tool()
     def update_event(

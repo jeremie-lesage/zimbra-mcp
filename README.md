@@ -199,7 +199,7 @@ Zimbra has no dry run for filters, so `find_matching_filters` evaluates them its
 |------|-------------|
 | `get_calendar_events` | Events over a period |
 | `get_event_details` | Full details of an event |
-| `create_event` | Create an event, optionally private |
+| `create_event` | Create an event, optionally private, with attendees invited by email if requested |
 | `update_event` | Change the title, time, location, description or privacy of an event you organize |
 | `get_free_busy` | User availability |
 
@@ -209,7 +209,7 @@ Zimbra has no dry run for filters, so `find_matching_filters` evaluates them its
 
 The content of emails is controlled by their senders. A malicious email can contain instructions aimed at the LLM (*prompt injection*), so the server limits what a manipulated model can do:
 
-- **No sending by default**: `send_email` only exists when `ZIMBRA_ENABLE_SEND=true`. Drafts are always safe to create.
+- **No sending by default**: `send_email` only exists when `ZIMBRA_ENABLE_SEND=true`, and `create_event` only emails invitations when it is set. Drafts are always safe to create.
 - **No irreversible deletion by default**: `hard_delete=True` is refused unless `ZIMBRA_ENABLE_HARD_DELETE=true`; emails and contacts go to the Trash.
 - **No filter changes by default**: a filter acts on every future email, so the filter write tools only exist when `ZIMBRA_ENABLE_FILTERS=true`. They never discard, redirect or reply: "delete" means moving to the Trash.
 - **File writes**: `download_attachment` strips any path from the file name (`../../.bashrc` becomes `bashrc`), never overwrites an existing file and caps the size (`ZIMBRA_MAX_ATTACHMENT_MB`). Set `ZIMBRA_DOWNLOAD_DIR` to confine writes to a single directory.

@@ -625,7 +625,32 @@ class TestCreateAppointment:
             attendees=["alice@test.com"],
         )
         params = _get_request_params(connected_client)
-        assert params["m"]["inv"]["comp"]["at"][0]["a"] == "alice@test.com"
+        comp = params["m"]["inv"]["comp"]
+        assert comp["at"] == [{"a": "alice@test.com", "role": "REQ", "ptst": "NE", "rsvp": "1"}]
+        assert comp["or"] == {"a": "test@example.com"}
+        assert "e" not in params["m"]
+
+    def test_send_invitations(self, connected_client):
+        resp = _make_ok_response("CreateAppointmentResponse", {"calItemId": "704"})
+        _setup_response(connected_client, resp)
+
+        connected_client.create_appointment(
+            subject="Meeting", start_time=1705312200000, end_time=1705315800000,
+            attendees=["alice@test.com", "bob@test.com"], send_invitations=True,
+        )
+        params = _get_request_params(connected_client)
+        assert params["m"]["e"] == [{"a": "alice@test.com", "t": "t"}, {"a": "bob@test.com", "t": "t"}]
+
+    def test_no_organizer_without_attendees(self, connected_client):
+        resp = _make_ok_response("CreateAppointmentResponse", {"calItemId": "705"})
+        _setup_response(connected_client, resp)
+
+        connected_client.create_appointment(
+            subject="Alone", start_time=1705312200000, end_time=1705315800000, send_invitations=True,
+        )
+        params = _get_request_params(connected_client)
+        assert "or" not in params["m"]["inv"]["comp"]
+        assert "e" not in params["m"]
 
 
 class TestModifyAppointment:
