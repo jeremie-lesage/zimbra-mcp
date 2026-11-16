@@ -1,5 +1,6 @@
 """Tests for calendar tools."""
 
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +10,8 @@ from zimbra_mcp.tools.calendar import (
     _extract_alarm,
     _is_true,
     _ms_to_datetime,
+    _parse_input_datetime,
+    _parse_zimbra_date,
     _text,
     register_calendar_tools,
 )
@@ -226,6 +229,188 @@ class TestCreateEvent:
         )
         assert result["private"] is True
         assert client.create_appointment.call_args.kwargs["private"] is True
+
+
+def _appt(comp_overrides=None, extra_invites=()):
+    comp = {
+        "isOrg": True,
+        "uid": "uid-800",
+        "calItemId": "800",
+        "name": "Weekly",
+        "loc": "Room 1",
+        "class": "PUB",
+        "s": [{"d": "20300115T100000", "tz": "Europe/Paris", "u": 1894698000000}],
+        "e": [{"d": "20300115T113000", "tz": "Europe/Paris", "u": 1894703400000}],
+        "alarm": [{"action": "DISPLAY", "trigger": [{"rel": [{"neg": True, "m": 15}]}]}],
+        "recur": [{"add": [{"rule": [{"freq": "WEE"}]}]}],
+        "desc": [{"_content": "plain"}],
+        "descHtml": [{"_content": "<p>html</p>"}],
+    }
+    comp.update(comp_overrides or {})
+    tz = [{"id": "Europe/Paris", "stdoff": 60}]
+    return {"appt": {"id": "800", "inv": [*extra_invites, {"id": 799, "tz": tz, "comp": [comp]}]}}
+
+
+class TestUpdateEvent:
+    def _sent(self, client):
+        args = client.modify_appointment.call_args.args
+        return args[0], args[1], args[2], args[3]
+
+    def test_private_only_keeps_the_rest(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt())
+        client.modify_appointment = MagicMock(return_value={})
+
+        result = tools["update_event"]("800", private=True)
+
+        invite_id, inv, text, html = self._sent(client)
+        comp = inv["comp"]
+        assert result["success"] is True
+        assert result["private"] is True
+        assert invite_id == "800-799"
+        assert comp["class"] == "PRI"
+        assert comp["name"] == "Weekly"
+        assert comp["recur"] == [{"add": [{"rule": [{"freq": "WEE"}]}]}]
+        assert comp["alarm"][0]["action"] == "DISPLAY"
+        assert comp["s"] == {"d": "20300115T100000", "tz": "Europe/Paris"}
+        assert comp["e"] == {"d": "20300115T113000", "tz": "Europe/Paris"}
+        assert not {"isOrg", "uid", "calItemId", "desc", "descHtml"} & comp.keys()
+        assert inv["tz"] == [{"id": "Europe/Paris", "stdoff": 60}]
+        assert (text, html) == ("plain", "<p>html</p>")
+        assert "warning" not in result
+
+    def test_make_public(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt({"class": "PRI"}))
+        client.modify_appointment = MagicMock(return_value={})
+
+        assert tools["update_event"]("800", private=False)["private"] is False
+        assert self._sent(client)[1]["comp"]["class"] == "PUB"
+
+    def test_new_start_keeps_duration(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt())
+        client.modify_appointment = MagicMock(return_value={})
+
+        result = tools["update_event"]("800", start_datetime="2030-01-16 14:00")
+
+        comp = self._sent(client)[1]["comp"]
+        assert comp["s"] == {"d": "20300116T140000", "tz": "Europe/Paris"}
+        assert comp["e"] == {"d": "20300116T153000", "tz": "Europe/Paris"}
+        assert (result["start"], result["end"]) == ("20300116T140000", "20300116T153000")
+
+    def test_new_end_only(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt())
+        client.modify_appointment = MagicMock(return_value={})
+
+        tools["update_event"]("800", end_datetime="2030-01-15T12:00")
+
+        comp = self._sent(client)[1]["comp"]
+        assert comp["s"]["d"] == "20300115T100000"
+        assert comp["e"]["d"] == "20300115T120000"
+
+    def test_all_day(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt({
+            "allDay": True, "s": [{"d": "20300115"}], "e": [{"d": "20300115"}],
+        }))
+        client.modify_appointment = MagicMock(return_value={})
+
+        tools["update_event"]("800", start_datetime="2030-01-20")
+
+        comp = self._sent(client)[1]["comp"]
+        assert comp["s"] == {"d": "20300120"}
+        assert comp["e"] == {"d": "20300120"}
+        assert comp["allDay"] is True
+
+    def test_end_before_start(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt())
+        client.modify_appointment = MagicMock()
+
+        result = tools["update_event"]("800", end_datetime="2030-01-15 09:00")
+
+        assert result["success"] is False
+        client.modify_appointment.assert_not_called()
+
+    def test_new_description_drops_html(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt())
+        client.modify_appointment = MagicMock(return_value={})
+
+        tools["update_event"]("800", description="new", subject="Renamed", location="")
+
+        _, inv, text, html = self._sent(client)
+        assert (text, html) == ("new", None)
+        assert inv["comp"]["name"] == "Renamed"
+        assert inv["comp"]["loc"] == ""
+
+    def test_nothing_to_update(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock()
+
+        result = tools["update_event"]("800")
+
+        assert result["success"] is False
+        client.get_appointment.assert_not_called()
+
+    def test_not_organizer(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt({"isOrg": False}))
+        client.modify_appointment = MagicMock()
+
+        result = tools["update_event"]("800", private=True)
+
+        assert result["success"] is False
+        client.modify_appointment.assert_not_called()
+
+    def test_skips_exceptions(self, cal_tools):
+        tools, client = cal_tools
+        exception = {"id": 801, "comp": [{"ex": True, "isOrg": True, "name": "Moved once"}]}
+        client.get_appointment = MagicMock(return_value=_appt(extra_invites=[exception]))
+        client.modify_appointment = MagicMock(return_value={})
+
+        tools["update_event"]("800", private=True)
+
+        invite_id, inv, _, _ = self._sent(client)
+        assert invite_id == "800-799"
+        assert inv["comp"]["name"] == "Weekly"
+
+    def test_only_exceptions(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value={"appt": {"id": "800", "inv": {"id": 1, "comp": {"ex": True}}}})
+        client.modify_appointment = MagicMock()
+
+        assert tools["update_event"]("800", private=True)["success"] is False
+        client.modify_appointment.assert_not_called()
+
+    def test_attendees_warning(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt({"at": [{"a": "alice@test.com"}]}))
+        client.modify_appointment = MagicMock(return_value={})
+
+        result = tools["update_event"]("800", private=True)
+
+        assert result["warning"] == "Attendees were not notified of the change"
+        assert self._sent(client)[1]["comp"]["at"] == [{"a": "alice@test.com"}]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("20300115T100000", datetime(2030, 1, 15, 10, 0)),
+        ("20300115T100000Z", datetime(2030, 1, 15, 10, 0)),
+        ("20300115", datetime(2030, 1, 15)),
+    ],
+)
+def test_parse_zimbra_date(value, expected):
+    assert _parse_zimbra_date(value) == expected
+
+
+def test_parse_input_datetime_rejects_garbage():
+    with pytest.raises(ValueError):
+        _parse_input_datetime("tomorrow", all_day=False)
 
 
 class TestGetFreeBusy:

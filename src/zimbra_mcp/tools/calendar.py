@@ -177,16 +177,8 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         Returns:
             Information about the created event
         """
-        if all_day:
-            start_dt = datetime.strptime(start_datetime[:10], "%Y-%m-%d")
-            end_dt = datetime.strptime(end_datetime[:10], "%Y-%m-%d")
-        else:
-            try:
-                start_dt = datetime.strptime(start_datetime, "%Y-%m-%d %H:%M")
-                end_dt = datetime.strptime(end_datetime, "%Y-%m-%d %H:%M")
-            except ValueError:
-                start_dt = datetime.strptime(start_datetime, "%Y-%m-%dT%H:%M")
-                end_dt = datetime.strptime(end_datetime, "%Y-%m-%dT%H:%M")
+        start_dt = _parse_input_datetime(start_datetime, all_day)
+        end_dt = _parse_input_datetime(end_datetime, all_day)
 
         start_ms = int(start_dt.timestamp() * 1000)
         end_ms = int(end_dt.timestamp() * 1000)
@@ -214,6 +206,84 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "all_day": all_day,
             "private": private,
         }
+
+    @mcp.tool()
+    def update_event(
+        event_id: str,
+        subject: str | None = None,
+        start_datetime: str | None = None,
+        end_datetime: str | None = None,
+        location: str | None = None,
+        description: str | None = None,
+        private: bool | None = None,
+    ) -> dict[str, Any]:
+        """Modify an event you organize. Only the given fields change.
+
+        A recurring event is modified as a whole series. Attendees are not notified.
+
+        Args:
+            event_id: Event ID (obtained via get_calendar_events)
+            subject: New title (optional)
+            start_datetime: New start in "YYYY-MM-DD HH:MM" or "YYYY-MM-DD" format for all-day events.
+                Without end_datetime, the end moves to keep the duration (optional)
+            end_datetime: New end, same format (optional)
+            location: New location (optional)
+            description: New description, replacing the current one (optional)
+            private: True to make the event private, False to make it public (optional)
+
+        Returns:
+            The modified event
+        """
+        changes = (subject, start_datetime, end_datetime, location, description, private)
+        if all(value is None for value in changes):
+            return {"success": False, "error": "Nothing to update"}
+
+        appt = _first(client.get_appointment(event_id).get("appt"))
+        inv = _series_invite(appt)
+        if inv is None:
+            return {"success": False, "error": f"Event {event_id} not found"}
+
+        comp = _first(inv.get("comp"))
+        if not _is_true(comp.get("isOrg")):
+            return {"success": False, "error": "Only events you organize can be modified"}
+
+        all_day = _is_true(comp.get("allDay"))
+        start, end = _reschedule(_first(comp.get("s")), _first(comp.get("e")), start_datetime, end_datetime, all_day)
+        if end["d"] < start["d"]:
+            return {"success": False, "error": "The event would end before it starts"}
+
+        new_comp = {key: comp[key] for key in _WRITABLE_COMP_KEYS if key in comp}
+        new_comp["s"] = start
+        new_comp["e"] = end
+        if subject is not None:
+            new_comp["name"] = subject
+        if location is not None:
+            new_comp["loc"] = location
+        if private is not None:
+            new_comp["class"] = "PRI" if private else "PUB"
+
+        text, html = _text(comp.get("desc")), _text(comp.get("descHtml")) or None
+        if description is not None:
+            text, html = description, None
+
+        new_inv: dict[str, Any] = {"comp": new_comp}
+        if inv.get("tz"):
+            new_inv["tz"] = inv["tz"]
+
+        client.modify_appointment(f"{appt['id']}-{inv['id']}", new_inv, text, html)
+
+        result = {
+            "success": True,
+            "event_id": appt["id"],
+            "subject": new_comp.get("name", ""),
+            "start": start["d"],
+            "end": end["d"],
+            "location": new_comp.get("loc", ""),
+            "private": new_comp.get("class") == "PRI",
+        }
+        if comp.get("at"):
+            result["warning"] = "Attendees were not notified of the change"
+        return result
 
     @mcp.tool()
     def get_free_busy(
@@ -299,6 +369,77 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "busy_slots": sorted(busy_slots, key=lambda s: s.get("start", "")),
             "free_slots": sorted(free_slots, key=lambda s: s.get("start", "")),
         }
+
+
+_WRITABLE_COMP_KEYS = (
+    "name", "loc", "allDay", "alarm", "recur", "at", "or", "class",
+    "status", "fb", "fba", "transp", "priority", "url",
+)
+
+
+def _first(value: Any) -> dict[str, Any]:
+    """Return a Zimbra element given alone or as the first item of a list."""
+    if isinstance(value, list):
+        return value[0] if value else {}
+    return value or {}
+
+
+def _series_invite(appt: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the invite of an event that is not an exception of a recurring series."""
+    invites = appt.get("inv") or []
+    if not isinstance(invites, list):
+        invites = [invites]
+    for inv in invites:
+        if not _is_true(_first(inv.get("comp")).get("ex")):
+            return inv
+    return None
+
+
+def _parse_input_datetime(value: str, all_day: bool) -> datetime:
+    """Parse a "YYYY-MM-DD HH:MM" (or "YYYY-MM-DDTHH:MM") date, or "YYYY-MM-DD" for all-day events."""
+    if all_day:
+        return datetime.strptime(value[:10], "%Y-%m-%d")
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M")
+    except ValueError:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M")
+
+
+def _parse_zimbra_date(value: str) -> datetime:
+    """Parse a Zimbra "YYYYMMDD'T'HHMMSS" or "YYYYMMDD" date, ignoring a UTC suffix."""
+    value = value.rstrip("Z")
+    if len(value) == 8:
+        return datetime.strptime(value, "%Y%m%d")
+    return datetime.strptime(value, "%Y%m%dT%H%M%S")
+
+
+def _reschedule(
+    start: dict[str, Any],
+    end: dict[str, Any],
+    start_input: str | None,
+    end_input: str | None,
+    all_day: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return the new start and end elements, keeping the time zone and, without a new end, the duration."""
+    end = end or start
+    fmt = "%Y%m%d" if all_day else "%Y%m%dT%H%M%S"
+
+    def element(original: dict[str, Any], when: datetime | None) -> dict[str, Any]:
+        new = {key: original[key] for key in ("d", "tz") if key in original}
+        if when is not None:
+            new["d"] = when.strftime(fmt)
+        return new
+
+    if start_input is None and end_input is None:
+        return element(start, None), element(end, None)
+
+    old_start = _parse_zimbra_date(start["d"])
+    new_start = _parse_input_datetime(start_input, all_day) if start_input else old_start
+    if end_input:
+        new_end = _parse_input_datetime(end_input, all_day)
+    else:
+        new_end = new_start + (_parse_zimbra_date(end["d"]) - old_start)
+    return element(start, new_start if start_input else None), element(end, new_end)
 
 
 def _text(value: Any) -> str:

@@ -200,7 +200,10 @@ Zimbra has no dry run for filters, so `find_matching_filters` evaluates them its
 | `get_calendar_events` | Events over a period |
 | `get_event_details` | Full details of an event |
 | `create_event` | Create an event, optionally private |
+| `update_event` | Change the title, time, location, description or privacy of an event you organize |
 | `get_free_busy` | User availability |
+
+`update_event` only changes the fields it is given and keeps the rest of the event (recurrence, reminder, attendees). A recurring event is modified as a whole series, and attendees are not notified of the change.
 
 ## Security
 

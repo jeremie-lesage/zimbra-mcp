@@ -628,6 +628,29 @@ class TestCreateAppointment:
         assert params["m"]["inv"]["comp"]["at"][0]["a"] == "alice@test.com"
 
 
+class TestModifyAppointment:
+    def test_params(self, connected_client):
+        resp = _make_ok_response("ModifyAppointmentResponse", {"calItemId": "700"})
+        _setup_response(connected_client, resp)
+
+        inv = {"comp": {"name": "Meeting", "class": "PRI"}}
+        connected_client.modify_appointment("700-699", inv, "Agenda", "<p>Agenda</p>")
+        params = _get_request_params(connected_client)
+        assert params["id"] == "700-699"
+        assert params["comp"] == "0"
+        assert params["m"]["su"] == "Meeting"
+        assert params["m"]["inv"] == inv
+        assert [p["ct"] for p in params["m"]["mp"]["mp"]] == ["text/plain", "text/html"]
+
+    def test_without_description(self, connected_client):
+        resp = _make_ok_response("ModifyAppointmentResponse", {"calItemId": "700"})
+        _setup_response(connected_client, resp)
+
+        connected_client.modify_appointment("700-699", {"comp": {"name": "Meeting"}}, "")
+        params = _get_request_params(connected_client)
+        assert "mp" not in params["m"]
+
+
 class TestGetFreeBusy:
     def test_params(self, connected_client):
         resp = _make_ok_response("GetFreeBusyResponse", {"usr": []})

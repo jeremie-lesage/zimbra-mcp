@@ -621,6 +621,31 @@ class ZimbraClient:
             params["m"]["mp"] = _body_part(description, None)
         return self.request("CreateAppointmentRequest", "urn:zimbraMail", params)
 
+    def modify_appointment(
+        self,
+        invite_id: str,
+        inv: dict[str, Any],
+        description: str,
+        description_html: str | None = None,
+    ) -> dict[str, Any]:
+        """Replace the default invite of an event.
+
+        Args:
+            invite_id: Invite ID ("<event id>-<invite id>")
+            inv: Full invite, with its single component and optional time zones
+            description: Plain text description
+            description_html: HTML description
+
+        Returns:
+            Information about the modified event
+        """
+        comp = inv["comp"]
+        m: dict[str, Any] = {"su": comp.get("name", ""), "inv": inv}
+        if description or description_html:
+            m["mp"] = _body_part(description, description_html)
+        params = {"id": invite_id, "comp": "0", "m": m}
+        return self.request("ModifyAppointmentRequest", "urn:zimbraMail", params)
+
     def get_free_busy(
         self,
         email: str,
