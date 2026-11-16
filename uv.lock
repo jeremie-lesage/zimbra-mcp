@@ -941,6 +941,7 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "mcp" },
     { name = "nh3" },
+    { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "python-zimbra" },
 ]
@@ -956,6 +957,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "mcp", specifier = ">=1.0.0" },
     { name = "nh3", specifier = ">=0.3.7" },
+    { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21" },
     { name = "python-dotenv", specifier = ">=1.0.0" },

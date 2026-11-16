@@ -176,7 +176,18 @@ Available colors: blue, cyan, green, purple, red, yellow, pink, gray, orange
 | `add_filter_condition` | Add one condition to a filter, keeping the others (opt-in) |
 | `remove_filter_condition` | Remove one condition from a filter, keeping the others (opt-in) |
 
-Conditions: sender, sender domain (`add_filter_condition` and `remove_filter_condition` only), subject, `List-Id` header (all "contains"), matched with `all` or `any`. Actions: move to a folder, tag, mark as read, move to the Trash, stop processing the next filters. Filters are identified by their name.
+A condition is `{"field": ..., "value": ..., "comparison": ..., "part": ...}`:
+
+- `field`: `sender` (From address), `recipient` (To or Cc address), `subject`, `list_id`, or any header name (`X-Spam-Flag`, `Reply-To`)
+- `comparison`: `contains` (default) or `is`, case-insensitive
+- `part`: for `sender` and `recipient`, `all` (default) or `domain`
+
+```json
+[{"field": "sender", "value": "spammer.com", "part": "domain"},
+ {"field": "X-VRSPAM-STATE", "value": "spam", "comparison": "is"}]
+```
+
+Conditions are matched with `all` or `any`. Actions: move to a folder, tag, mark as read, flag, keep a copy in the Inbox, move to the Trash, stop processing the next filters. Filters are identified by their name.
 
 Zimbra only accepts the whole filter list on write: each write tool reads the list, changes one filter and sends the list back, leaving the other filters untouched, including conditions and actions these tools cannot create. A change made in the web client between that read and that write is lost.
 

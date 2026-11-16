@@ -1,19 +1,24 @@
 """Tests for filter tools."""
 
+import asyncio
 import copy
+import json
 from unittest.mock import MagicMock
 
 import pytest
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from tests.conftest import capture_tools
 from zimbra_mcp.config import ZimbraConfig
 from zimbra_mcp.errors import ZimbraNotFoundError
 from zimbra_mcp.tools.filters import (
+    FilterCondition,
     _build_actions,
     _build_tests,
     _evaluate_rule,
     _evaluate_test,
-    _single_condition,
+    _parse_condition,
     _summarize_rule,
     _target_index,
     register_filter_tools,
@@ -125,12 +130,47 @@ class TestSummarize:
         assert result["filters"][1]["active"] is False
 
 
+def _c(field, value, **extra):
+    return {"field": field, "value": value, **extra}
+
+
+class TestParseCondition:
+    def test_sender_and_recipient_are_address_tests(self):
+        assert _parse_condition(_c("sender", " bob@a.com ")) == (
+            "addressTest", {"header": "from", "part": "all", "stringComparison": "contains", "value": "bob@a.com"}
+        )
+        assert _parse_condition(_c("Recipient", "atos.net", part="domain", comparison="is")) == (
+            "addressTest", {"header": "to,cc", "part": "domain", "stringComparison": "is", "value": "atos.net"}
+        )
+
+    def test_known_and_custom_headers(self):
+        assert _parse_condition(_c("list_id", "l.a.com"))[1]["header"] == "List-Id"
+        assert _parse_condition(_c("subject", "x"))[1]["header"] == "subject"
+        assert _parse_condition(_c("X-VRSPAM-STATE", "spam", comparison="is")) == (
+            "headerTest", {"header": "X-VRSPAM-STATE", "stringComparison": "is", "value": "spam"}
+        )
+
+    def test_accepts_model(self):
+        assert _parse_condition(FilterCondition(field="sender", value="a"))[0] == "addressTest"
+
+    @pytest.mark.parametrize("spec", [
+        _c("sender", "  "),
+        _c("subject", "x", part="domain"),
+        _c("X Spam", "x"),
+        _c("x,from", "x"),
+        _c("sender", "x", comparison="matches"),
+        {"value": "x"},
+    ])
+    def test_invalid(self, spec):
+        assert isinstance(_parse_condition(spec), str)
+
+
 class TestBuildTests:
-    def test_all_conditions(self):
-        tests = _build_tests("bob@a.com", " Invoice ", "list.a.com", "any")
+    def test_groups_by_kind_with_global_index(self):
+        tests = _build_tests([_c("sender", "bob@a.com"), _c("subject", "Invoice"), _c("list_id", "list.a.com")], "any")
         assert tests == {
             "condition": "anyof",
-            "addressTest": [{"index": 0, "header": "from", "stringComparison": "contains", "value": "bob@a.com", "part": "all"}],
+            "addressTest": [{"index": 0, "header": "from", "part": "all", "stringComparison": "contains", "value": "bob@a.com"}],
             "headerTest": [
                 {"index": 1, "header": "subject", "stringComparison": "contains", "value": "Invoice"},
                 {"index": 2, "header": "List-Id", "stringComparison": "contains", "value": "list.a.com"},
@@ -138,10 +178,13 @@ class TestBuildTests:
         }
 
     def test_requires_a_condition(self):
-        assert isinstance(_build_tests(None, " ", None, "all"), str)
+        assert isinstance(_build_tests([], "all"), str)
+
+    def test_invalid_condition(self):
+        assert isinstance(_build_tests([_c("sender", "a"), _c("bad field", "b")], "all"), str)
 
     def test_invalid_match(self):
-        assert isinstance(_build_tests("a", None, None, "some"), str)
+        assert isinstance(_build_tests([_c("sender", "a")], "some"), str)
 
 
 class TestBuildActions:
@@ -151,42 +194,50 @@ class TestBuildActions:
         client.get_all_tags.return_value = {"tag": {"id": "1", "name": "news"}}
         return client
 
+    def _build(self, client, folder=None, tag=None, mark_read=False, flag=False, keep=False, trash=False, stop=True):
+        return _build_actions(client, folder, tag, mark_read, flag, keep, trash, stop)
+
     def test_all_actions_in_order(self, client):
-        actions = _build_actions(client, "/Inbox/News/", "news", True, False, True)
+        actions = self._build(client, "/Inbox/News/", "news", mark_read=True, flag=True, keep=True)
         assert actions == {
-            "actionFlag": [{"index": 0, "flagName": "read"}],
-            "actionTag": [{"index": 1, "tagName": "news"}],
-            "actionFileInto": [{"index": 2, "folderPath": "Inbox/News", "copy": False}],
-            "actionStop": [{"index": 3}],
+            "actionFlag": [{"index": 0, "flagName": "read"}, {"index": 1, "flagName": "flagged"}],
+            "actionTag": [{"index": 2, "tagName": "news"}],
+            "actionKeep": [{"index": 3}],
+            "actionFileInto": [{"index": 4, "folderPath": "Inbox/News", "copy": False}],
+            "actionStop": [{"index": 5}],
         }
         client.get_folder.assert_called_once_with("/Inbox/News")
 
+    def test_flag_alone(self, client):
+        assert self._build(client, flag=True, stop=False) == {"actionFlag": [{"index": 0, "flagName": "flagged"}]}
+
     def test_trash_moves_to_trash(self, client):
-        actions = _build_actions(client, None, None, False, True, False)
+        actions = self._build(client, trash=True, stop=False)
         assert actions == {"actionFileInto": [{"index": 0, "folderPath": "Trash", "copy": False}]}
 
-    def test_never_discards(self, client):
-        actions = _build_actions(client, None, None, True, True, True)
-        assert "actionDiscard" not in actions
+    def test_never_discards_redirects_or_replies(self, client):
+        actions = self._build(client, "Inbox", "news", True, True, True)
+        assert not {"actionDiscard", "actionRedirect", "actionReply", "actionNotify"} & set(actions)
 
-    def test_folder_and_trash_exclusive(self, client):
-        assert isinstance(_build_actions(client, "Inbox", None, False, True, True), str)
+    def test_exclusive_actions(self, client):
+        assert isinstance(self._build(client, "Inbox", trash=True), str)
+        assert isinstance(self._build(client, keep=True, trash=True), str)
 
     def test_requires_an_action(self, client):
-        assert isinstance(_build_actions(client, None, None, False, False, True), str)
+        assert isinstance(self._build(client), str)
 
     def test_unknown_folder(self, client):
         client.get_folder.side_effect = ZimbraNotFoundError("no such folder path")
-        assert "does not exist" in _build_actions(client, "Nope", None, False, False, True)
+        assert "does not exist" in self._build(client, "Nope")
 
     def test_unknown_tag(self, client):
-        assert "create_tag" in _build_actions(client, None, "missing", False, False, True)
+        assert "create_tag" in self._build(client, tag="missing")
 
 
 class TestAddFilter:
     def test_appends_and_keeps_existing_rules(self, filter_tools):
         tools, client = filter_tools
-        result = tools["add_filter"](name="Bob", sender="bob@a.com", folder="Inbox/Bob")
+        result = tools["add_filter"](name="Bob", conditions=[_c("sender", "bob@a.com")], folder="Inbox/Bob")
         assert result["success"] is True
         assert result["position"] == 3
         written = _written(client)
@@ -194,20 +245,34 @@ class TestAddFilter:
         assert written[2]["name"] == "Bob"
         assert written[2]["active"] is True
 
+    def test_advanced_conditions(self, filter_tools):
+        tools, client = filter_tools
+        tools["add_filter"](
+            name="VRSPAM",
+            conditions=[_c("X-VRSPAM-STATE", "spam", comparison="is"), _c("recipient", "atos.net", part="domain")],
+            match="any", folder="Junk", flag=True,
+        )
+        rule = _written(client)[2]
+        assert rule["filterTests"] == [{
+            "condition": "anyof",
+            "headerTest": [{"index": 0, "header": "X-VRSPAM-STATE", "stringComparison": "is", "value": "spam"}],
+            "addressTest": [{"index": 1, "header": "to,cc", "part": "domain", "stringComparison": "contains", "value": "atos.net"}],
+        }]
+
     def test_duplicate_name(self, filter_tools):
         tools, client = filter_tools
-        result = tools["add_filter"](name="News", sender="x", trash=True)
+        result = tools["add_filter"](name="News", conditions=[_c("sender", "x")], trash=True)
         assert result["success"] is False
         client.modify_filter_rules.assert_not_called()
 
     def test_empty_name(self, filter_tools):
         tools, client = filter_tools
-        assert tools["add_filter"](name="  ", sender="x", trash=True)["success"] is False
+        assert tools["add_filter"](name="  ", conditions=[_c("sender", "x")], trash=True)["success"] is False
         client.modify_filter_rules.assert_not_called()
 
     def test_invalid_action_writes_nothing(self, filter_tools):
         tools, client = filter_tools
-        assert tools["add_filter"](name="X", sender="x")["success"] is False
+        assert tools["add_filter"](name="X", conditions=[_c("sender", "x")])["success"] is False
         client.modify_filter_rules.assert_not_called()
 
 
@@ -233,27 +298,29 @@ class TestTargetIndex:
 class TestAddFilterInvalidCondition:
     def test_writes_nothing(self, filter_tools):
         tools, client = filter_tools
-        assert tools["add_filter"](name="X", folder="Inbox")["success"] is False
-        assert tools["add_filter"](name="X", sender="a", match="some", folder="Inbox")["success"] is False
+        assert tools["add_filter"](name="X", conditions=[], folder="Inbox")["success"] is False
+        assert tools["add_filter"](name="X", conditions=[_c("sender", "a")], match="some", folder="Inbox")["success"] is False
+        assert tools["add_filter"](name="X", conditions=[_c("bad field", "a")], folder="Inbox")["success"] is False
         client.modify_filter_rules.assert_not_called()
 
 
 class TestAddFilterPlacement:
     def test_before(self, filter_tools):
         tools, client = filter_tools
-        result = tools["add_filter"](name="Bob", sender="bob@a.com", trash=True, before="Spam")
+        result = tools["add_filter"](name="Bob", conditions=[_c("sender", "bob@a.com")], trash=True, before="Spam")
         assert [r["name"] for r in _written(client)] == ["Bob", "Spam", "News"]
         assert (result["position"], result["after"], result["before"]) == (1, None, "Spam")
 
     def test_position(self, filter_tools):
         tools, client = filter_tools
-        result = tools["add_filter"](name="Bob", sender="bob@a.com", trash=True, position=2)
+        result = tools["add_filter"](name="Bob", conditions=[_c("sender", "bob@a.com")], trash=True, position=2)
         assert [r["name"] for r in _written(client)] == ["Spam", "Bob", "News"]
         assert (result["after"], result["before"]) == ("Spam", "News")
 
     def test_unknown_before_writes_nothing(self, filter_tools):
         tools, client = filter_tools
-        assert tools["add_filter"](name="Bob", sender="b", trash=True, before="Nope")["success"] is False
+        result = tools["add_filter"](name="Bob", conditions=[_c("sender", "b")], trash=True, before="Nope")
+        assert result["success"] is False
         client.modify_filter_rules.assert_not_called()
 
 
@@ -304,13 +371,21 @@ class TestUpdateFilter:
 
     def test_replace_conditions_keeps_match_and_actions(self, filter_tools):
         tools, client = filter_tools
-        tools["update_filter"](name="Spam", subject="promo")
+        tools["update_filter"](name="Spam", conditions=[_c("subject", "promo")])
         rule = _written(client)[0]
         assert rule["filterTests"] == [{
             "condition": "anyof",
             "headerTest": [{"index": 0, "header": "subject", "stringComparison": "contains", "value": "promo"}],
         }]
         assert rule["filterActions"] == COMPLEX_RULE["filterActions"]
+
+    def test_match_alone_keeps_conditions(self, filter_tools):
+        tools, client = filter_tools
+        rules = client.get_filter_rules.return_value
+        tools["update_filter"](name="Spam", match="all")
+        tests = _written(client)[0]["filterTests"][0]
+        assert tests == {**COMPLEX_RULE["filterTests"][0], "condition": "allof"}
+        assert rules[0] == COMPLEX_RULE
 
     def test_replace_actions_keeps_conditions(self, filter_tools):
         tools, client = filter_tools
@@ -331,32 +406,27 @@ class TestUpdateFilter:
         tools, client = filter_tools
         assert tools["update_filter"](name="News", new_name="  ")["success"] is False
         assert tools["update_filter"](name="News", match="some")["success"] is False
+        assert tools["update_filter"](name="News", conditions=[])["success"] is False
         assert tools["update_filter"](name="News", folder="Inbox", trash=True)["success"] is False
         client.modify_filter_rules.assert_not_called()
 
     def test_valid_change_is_not_written_when_another_is_invalid(self, filter_tools):
         tools, client = filter_tools
-        assert tools["update_filter"](name="News", active=True, sender="x", match="some")["success"] is False
+        result = tools["update_filter"](name="News", active=True, conditions=[_c("sender", "x")], match="some")
+        assert result["success"] is False
         client.modify_filter_rules.assert_not_called()
 
-
-class TestSingleCondition:
-    def test_kinds(self):
-        assert _single_condition("bob@a.com", None, None, None) == (
-            "addressTest", {"header": "from", "part": "all", "stringComparison": "contains", "value": "bob@a.com"}
-        )
-        assert _single_condition(None, " a.com ", None, None)[1]["part"] == "domain"
-        assert _single_condition(None, None, None, "l.a.com")[1]["header"] == "List-Id"
-
-    def test_exactly_one(self):
-        assert isinstance(_single_condition(None, None, None, None), str)
-        assert isinstance(_single_condition("a", None, "b", None), str)
+    def test_match_alone_on_filter_without_condition_block(self, filter_tools):
+        tools, client = filter_tools
+        client.get_filter_rules.return_value = [{"name": "Empty", "active": True, "filterActions": []}]
+        assert tools["update_filter"](name="Empty", match="any")["success"] is False
+        client.modify_filter_rules.assert_not_called()
 
 
 class TestAddFilterCondition:
     def test_appends_to_existing_conditions(self, filter_tools):
         tools, client = filter_tools
-        result = tools["add_filter_condition"](name="Spam", sender_domain="spammer.com")
+        result = tools["add_filter_condition"](name="Spam", condition=_c("sender", "spammer.com", part="domain"))
         assert result["success"] is True
         assert result["conditions_count"] == 3
         written = _written(client)
@@ -370,65 +440,79 @@ class TestAddFilterCondition:
         assert written[0]["filterActions"] == COMPLEX_RULE["filterActions"]
         assert written[1] == NEWS_RULE
 
+    def test_custom_header_with_is(self, filter_tools):
+        tools, client = filter_tools
+        tools["add_filter_condition"](name="Spam", condition=_c("X-Spam-Flag", "YES", comparison="is"))
+        assert _written(client)[0]["filterTests"][0]["headerTest"][-1] == {
+            "index": 2, "header": "X-Spam-Flag", "stringComparison": "is", "value": "YES",
+        }
+
     def test_does_not_mutate_read_rules(self, filter_tools):
         tools, client = filter_tools
         rules = client.get_filter_rules.return_value
-        tools["add_filter_condition"](name="News", subject="promo")
+        tools["add_filter_condition"](name="News", condition=_c("subject", "promo"))
         assert rules[1] == NEWS_RULE
 
     def test_duplicate_is_refused(self, filter_tools):
         tools, client = filter_tools
-        result = tools["add_filter_condition"](name="News", sender="NEWS@a.com")
+        result = tools["add_filter_condition"](name="News", condition=_c("sender", "NEWS@a.com"))
         assert result["success"] is False
         client.modify_filter_rules.assert_not_called()
 
-    def test_needs_exactly_one_condition(self, filter_tools):
+    def test_invalid_condition(self, filter_tools):
         tools, client = filter_tools
-        assert tools["add_filter_condition"](name="News", sender="a", subject="b")["success"] is False
+        assert tools["add_filter_condition"](name="News", condition=_c("bad field", "a"))["success"] is False
         client.modify_filter_rules.assert_not_called()
 
     def test_unknown_filter(self, filter_tools):
         tools, client = filter_tools
-        assert tools["add_filter_condition"](name="Nope", sender="a")["success"] is False
+        assert tools["add_filter_condition"](name="Nope", condition=_c("sender", "a"))["success"] is False
         client.modify_filter_rules.assert_not_called()
 
 
 class TestRemoveFilterCondition:
     def test_removes_only_that_condition(self, filter_tools):
         tools, client = filter_tools
-        result = tools["remove_filter_condition"](name="Spam", list_id="nope")
+        result = tools["remove_filter_condition"](name="Spam", condition=_c("list_id", "nope"))
         assert result["success"] is False
-        tools["add_filter_condition"](name="News", sender="other@a.com")
+        tools["add_filter_condition"](name="News", condition=_c("sender", "other@a.com"))
         client.get_filter_rules.return_value = _written(client)
-        result = tools["remove_filter_condition"](name="News", sender="News@A.com")
+        result = tools["remove_filter_condition"](name="News", condition=_c("sender", "News@A.com"))
         assert result["success"] is True
         assert result["conditions_count"] == 1
         block = _written(client)[1]["filterTests"][0]
         assert [t["value"] for t in block["addressTest"]] == ["other@a.com"]
         assert _written(client)[0] == COMPLEX_RULE
 
+    def test_found_whatever_the_comparison(self, filter_tools):
+        tools, client = filter_tools
+        result = tools["remove_filter_condition"](name="Spam", condition=_c("x-vrspam-state", "SPAM"))
+        assert result["success"] is True
+        assert "headerTest" not in _written(client)[0]["filterTests"][0]
+
     def test_part_must_match(self, filter_tools):
         tools, client = filter_tools
-        assert tools["remove_filter_condition"](name="News", sender_domain="news@a.com")["success"] is False
+        result = tools["remove_filter_condition"](name="News", condition=_c("sender", "news@a.com", part="domain"))
+        assert result["success"] is False
         client.modify_filter_rules.assert_not_called()
 
     def test_last_condition_is_kept(self, filter_tools):
         tools, client = filter_tools
-        result = tools["remove_filter_condition"](name="News", sender="news@a.com")
+        result = tools["remove_filter_condition"](name="News", condition=_c("sender", "news@a.com"))
         assert result["success"] is False
         assert "delete_filter" in result["error"]
         client.modify_filter_rules.assert_not_called()
 
     def test_invalid_input_writes_nothing(self, filter_tools):
         tools, client = filter_tools
-        assert tools["remove_filter_condition"](name="News")["success"] is False
-        assert tools["remove_filter_condition"](name="Nope", sender="news@a.com")["success"] is False
+        assert tools["remove_filter_condition"](name="News", condition=_c("sender", " "))["success"] is False
+        assert tools["remove_filter_condition"](name="Nope", condition=_c("sender", "news@a.com"))["success"] is False
         client.modify_filter_rules.assert_not_called()
 
     def test_filter_without_condition_block(self, filter_tools):
         tools, client = filter_tools
         client.get_filter_rules.return_value = [{"name": "Empty", "active": True, "filterActions": []}]
-        assert tools["add_filter_condition"](name="Empty", sender="a")["success"] is False
+        assert tools["add_filter_condition"](name="Empty", condition=_c("sender", "a"))["success"] is False
         client.modify_filter_rules.assert_not_called()
 
 
@@ -586,6 +670,51 @@ class TestFindMatchingFilters:
         result = find(sender="a@other.com", list_id="<news.shop.com>")
         assert result["stopped_by"] == "List"
         assert result["email"]["list_id"] == ["<news.shop.com>"]
+
+    def test_hypothetical_recipient(self, connected_client):
+        rules = [_rule("Atos", "anyof", {"addressTest": [{**_addr("atos.net", part="domain"), "header": "to,cc"}]})]
+        connected_client.get_filter_rules = MagicMock(return_value=rules)
+        find = capture_tools(register_filter_tools, connected_client)["find_matching_filters"]
+        assert find(sender="a@b.com")["stopped_by"] is None
+        result = find(sender="a@b.com", recipient="Bob <bob@atos.net>")
+        assert result["stopped_by"] == "Atos"
+        assert result["email"]["to"] == ["Bob <bob@atos.net>"]
+
+
+class TestFastMCPIntegration:
+    @pytest.fixture
+    def server(self, connected_client):
+        connected_client.get_filter_rules = MagicMock(return_value=copy.deepcopy([NEWS_RULE]))
+        connected_client.modify_filter_rules = MagicMock(return_value={})
+        connected_client.get_folder = MagicMock(return_value={"folder": {"id": "4"}})
+        server = FastMCP("test")
+        register_filter_tools(server, connected_client, _enabled())
+        return server, connected_client
+
+    def test_condition_schema_is_exposed(self, server):
+        server, _ = server
+        tools = {t.name: t for t in asyncio.run(server.list_tools())}
+        schema = json.dumps(tools["add_filter"].inputSchema)
+        assert '"field"' in schema
+        assert '"contains"' in schema and '"is"' in schema
+        assert '"domain"' in schema
+
+    def test_json_conditions_are_validated(self, server):
+        server, client = server
+        asyncio.run(server.call_tool("add_filter", {
+            "name": "VRSPAM",
+            "conditions": [{"field": "X-VRSPAM-STATE", "value": "spam", "comparison": "is"}],
+            "folder": "Junk",
+        }))
+        assert _written(client)[1]["filterTests"][0]["headerTest"][0]["stringComparison"] == "is"
+
+    def test_invalid_comparison_is_rejected_before_writing(self, server):
+        server, client = server
+        with pytest.raises(ToolError, match="comparison"):
+            asyncio.run(server.call_tool("add_filter_condition", {
+                "name": "News", "condition": {"field": "sender", "value": "a", "comparison": "matches"},
+            }))
+        client.modify_filter_rules.assert_not_called()
 
 
 class TestGetMessageHeaders:
