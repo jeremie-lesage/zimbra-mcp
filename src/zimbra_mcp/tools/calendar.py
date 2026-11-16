@@ -473,8 +473,7 @@ def _extract_alarm(alarms: list | dict) -> dict | None:
         return None
 
     alarm = alarms[0]
-    trigger = alarm.get("trigger", {})
-    rel = trigger.get("rel", {})
+    rel = _first(_first(alarm.get("trigger")).get("rel"))
 
     return {
         "action": alarm.get("action"),

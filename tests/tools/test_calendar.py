@@ -52,6 +52,10 @@ class TestExtractAlarm:
         assert result["action"] == "DISPLAY"
         assert result["minutes_before"] == 15
 
+    def test_lists_as_returned_by_zimbra(self):
+        alarms = [{"action": "DISPLAY", "trigger": [{"rel": [{"neg": True, "m": 15, "related": "START"}]}]}]
+        assert _extract_alarm(alarms) == {"action": "DISPLAY", "minutes_before": 15}
+
     def test_empty(self):
         assert _extract_alarm([]) is None
         assert _extract_alarm({}) is None
