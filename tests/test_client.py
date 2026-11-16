@@ -593,6 +593,17 @@ class TestCreateAppointment:
         params = _get_request_params(connected_client)
         assert params["m"]["inv"]["comp"]["name"] == "Meeting"
         assert params["m"]["su"] == "Meeting"
+        assert "class" not in params["m"]["inv"]["comp"]
+
+    def test_private(self, connected_client):
+        resp = _make_ok_response("CreateAppointmentResponse", {"calItemId": "702"})
+        _setup_response(connected_client, resp)
+
+        connected_client.create_appointment(
+            subject="Doctor", start_time=1705312200000, end_time=1705315800000, private=True,
+        )
+        params = _get_request_params(connected_client)
+        assert params["m"]["inv"]["comp"]["class"] == "PRI"
 
     def test_with_attendees(self, connected_client):
         resp = _make_ok_response("CreateAppointmentResponse", {"calItemId": "701"})

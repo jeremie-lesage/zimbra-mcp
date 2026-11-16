@@ -160,6 +160,7 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         description: str | None = None,
         attendees: list[str] | None = None,
         all_day: bool = False,
+        private: bool = False,
     ) -> dict[str, Any]:
         """Create a calendar event.
 
@@ -171,6 +172,7 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             description: Event description (optional)
             attendees: List of attendee emails (optional)
             all_day: All-day event (default: False)
+            private: Private event, its details hidden from people who share the calendar (default: False)
 
         Returns:
             Information about the created event
@@ -197,6 +199,7 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             description=description,
             attendees=attendees,
             all_day=all_day,
+            private=private,
         )
 
         return {
@@ -209,6 +212,7 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "location": location,
             "attendees": attendees,
             "all_day": all_day,
+            "private": private,
         }
 
     @mcp.tool()

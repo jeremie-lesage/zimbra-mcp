@@ -566,6 +566,7 @@ class ZimbraClient:
         description: str | None = None,
         attendees: list[str] | None = None,
         all_day: bool = False,
+        private: bool = False,
     ) -> dict[str, Any]:
         """Create a calendar event.
 
@@ -577,6 +578,7 @@ class ZimbraClient:
             description: Description
             attendees: List of attendees
             all_day: All-day event
+            private: Private event (class PRI)
 
         Returns:
             Information about the created event
@@ -613,6 +615,9 @@ class ZimbraClient:
 
         if all_day:
             inv["comp"]["allDay"] = "1"
+
+        if private:
+            inv["comp"]["class"] = "PRI"
 
         params = {"m": {"inv": inv, "su": subject}}
         return self.request("CreateAppointmentRequest", "urn:zimbraMail", params)

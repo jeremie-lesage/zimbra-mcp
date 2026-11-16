@@ -199,7 +199,7 @@ Zimbra has no dry run for filters, so `find_matching_filters` evaluates them its
 |------|-------------|
 | `get_calendar_events` | Events over a period |
 | `get_event_details` | Full details of an event |
-| `create_event` | Create an event |
+| `create_event` | Create an event, optionally private |
 | `get_free_busy` | User availability |
 
 ## Security

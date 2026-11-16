@@ -205,6 +205,19 @@ class TestCreateEvent:
         assert result["success"] is True
         assert result["all_day"] is True
 
+    def test_create_private_event(self, cal_tools):
+        tools, client = cal_tools
+        client.create_appointment = MagicMock(return_value={"calItemId": "702"})
+
+        result = tools["create_event"](
+            subject="Doctor",
+            start_datetime="2024-01-15 12:00",
+            end_datetime="2024-01-15 13:00",
+            private=True,
+        )
+        assert result["private"] is True
+        assert client.create_appointment.call_args.kwargs["private"] is True
+
 
 class TestGetFreeBusy:
     def test_get_free_busy(self, cal_tools):
