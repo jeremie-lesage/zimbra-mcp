@@ -13,6 +13,7 @@ from zimbra_mcp.tools.filters import (
     _build_tests,
     _single_condition,
     _summarize_rule,
+    _target_index,
     register_filter_tools,
 )
 
@@ -75,7 +76,7 @@ class TestRegistration:
         tools = capture_tools(register_filter_tools, connected_client, _enabled())
         assert set(tools) == {
             "list_filters", "add_filter", "update_filter", "delete_filter",
-            "add_filter_condition", "remove_filter_condition",
+            "add_filter_condition", "remove_filter_condition", "move_filter",
         }
 
     def test_env_flag(self, monkeypatch):
@@ -205,6 +206,70 @@ class TestAddFilter:
     def test_invalid_action_writes_nothing(self, filter_tools):
         tools, client = filter_tools
         assert tools["add_filter"](name="X", sender="x")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+
+class TestTargetIndex:
+    RULES = [{"name": "A"}, {"name": "B"}, {"name": "C"}]
+
+    def test_default_is_end(self):
+        assert _target_index(self.RULES, None, None) == 3
+
+    def test_before(self):
+        assert _target_index(self.RULES, "B", None) == 1
+
+    def test_position_is_one_based_and_clamped(self):
+        assert _target_index(self.RULES, None, 1) == 0
+        assert _target_index(self.RULES, None, 99) == 3
+
+    def test_errors(self):
+        assert isinstance(_target_index(self.RULES, "Nope", None), str)
+        assert isinstance(_target_index(self.RULES, None, 0), str)
+        assert isinstance(_target_index(self.RULES, "A", 1), str)
+
+
+class TestAddFilterPlacement:
+    def test_before(self, filter_tools):
+        tools, client = filter_tools
+        result = tools["add_filter"](name="Bob", sender="bob@a.com", trash=True, before="Spam")
+        assert [r["name"] for r in _written(client)] == ["Bob", "Spam", "News"]
+        assert (result["position"], result["after"], result["before"]) == (1, None, "Spam")
+
+    def test_position(self, filter_tools):
+        tools, client = filter_tools
+        result = tools["add_filter"](name="Bob", sender="bob@a.com", trash=True, position=2)
+        assert [r["name"] for r in _written(client)] == ["Spam", "Bob", "News"]
+        assert (result["after"], result["before"]) == ("Spam", "News")
+
+    def test_unknown_before_writes_nothing(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["add_filter"](name="Bob", sender="b", trash=True, before="Nope")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+
+class TestMoveFilter:
+    def test_move_before(self, filter_tools):
+        tools, client = filter_tools
+        result = tools["move_filter"](name="News", before="Spam")
+        assert _written(client) == [NEWS_RULE, COMPLEX_RULE]
+        assert (result["previous_position"], result["position"]) == (2, 1)
+
+    def test_move_to_position(self, filter_tools):
+        tools, client = filter_tools
+        tools["move_filter"](name="Spam", position=99)
+        assert _written(client) == [NEWS_RULE, COMPLEX_RULE]
+
+    def test_needs_exactly_one_target(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["move_filter"](name="Spam")["success"] is False
+        assert tools["move_filter"](name="Spam", before="News", position=1)["success"] is False
+        assert tools["move_filter"](name="Spam", before="Spam")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+    def test_unknown_filter(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["move_filter"](name="Nope", position=1)["success"] is False
+        assert tools["move_filter"](name="Spam", before="Nope")["success"] is False
         client.modify_filter_rules.assert_not_called()
 
 

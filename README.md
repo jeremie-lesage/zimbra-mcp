@@ -168,7 +168,8 @@ Available colors: blue, cyan, green, purple, red, yellow, pink, gray, orange
 | Tool | Description |
 |------|-------------|
 | `list_filters` | List incoming mail filters in execution order |
-| `add_filter` | Add a filter at the end of the list (opt-in, requires `ZIMBRA_ENABLE_FILTERS=true`) |
+| `add_filter` | Add a filter, at the end of the list or at a given place (opt-in, requires `ZIMBRA_ENABLE_FILTERS=true`) |
+| `move_filter` | Move a filter before another one or to a position (opt-in) |
 | `update_filter` | Rename, enable/disable, or replace the conditions or actions of a filter (opt-in) |
 | `delete_filter` | Delete a filter (opt-in) |
 | `add_filter_condition` | Add one condition to a filter, keeping the others (opt-in) |
