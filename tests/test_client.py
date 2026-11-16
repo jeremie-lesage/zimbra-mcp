@@ -676,6 +676,18 @@ class TestModifyAppointment:
         assert "mp" not in params["m"]
 
 
+class TestTrashAppointment:
+    def test_params(self, connected_client):
+        resp = _make_ok_response("ItemActionResponse", {"action": {"op": "trash", "id": "700"}})
+        _setup_response(connected_client, resp)
+
+        connected_client.trash_appointment("700")
+        params = _get_request_params(connected_client)
+        assert params == {"action": {"op": "trash", "id": "700"}}
+        add_request = connected_client._comm.gen_request.return_value.add_request
+        assert add_request.call_args[0][0] == "ItemActionRequest"
+
+
 class TestGetTimezone:
     def test_reads_pref(self, connected_client):
         resp = _make_ok_response("GetPrefsResponse", {"_attrs": {"zimbraPrefTimeZoneId": "Europe/Brussels"}})

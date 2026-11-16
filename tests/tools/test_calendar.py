@@ -515,6 +515,17 @@ class TestUpdateEvent:
         assert self._sent(client)[1]["comp"]["at"] == [{"a": "alice@test.com"}]
 
 
+class TestDeleteEvent:
+    def test_moves_to_trash(self, cal_tools):
+        tools, client = cal_tools
+        client.trash_appointment = MagicMock(return_value={"action": {"op": "trash", "id": "800"}})
+
+        result = tools["delete_event"]("800")
+
+        assert result == {"success": True, "event_id": "800", "moved_to": "Trash"}
+        client.trash_appointment.assert_called_once_with("800")
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

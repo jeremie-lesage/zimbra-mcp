@@ -651,6 +651,18 @@ class ZimbraClient:
         params = {"id": invite_id, "comp": "0", "m": m}
         return self.request("ModifyAppointmentRequest", "urn:zimbraMail", params)
 
+    def trash_appointment(self, appt_id: str) -> dict[str, Any]:
+        """Move an event, with all its occurrences, to the Trash.
+
+        Args:
+            appt_id: Event ID
+
+        Returns:
+            Zimbra response
+        """
+        params = {"action": {"op": "trash", "id": appt_id}}
+        return self.request("ItemActionRequest", "urn:zimbraMail", params)
+
     def get_timezone(self) -> str | None:
         """Return the time zone ID set in the account preferences (zimbraPrefTimeZoneId)."""
         params = {"pref": {"name": "zimbraPrefTimeZoneId"}}

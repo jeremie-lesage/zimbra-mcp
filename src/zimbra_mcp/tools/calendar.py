@@ -307,6 +307,21 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
         return result
 
     @mcp.tool()
+    def delete_event(event_id: str) -> dict[str, Any]:
+        """Move an event to the Trash. A recurring event is deleted with all its occurrences.
+
+        Neither the organizer nor the attendees are notified.
+
+        Args:
+            event_id: Event ID (obtained via get_calendar_events)
+
+        Returns:
+            Operation result
+        """
+        client.trash_appointment(event_id)
+        return {"success": True, "event_id": event_id, "moved_to": "Trash"}
+
+    @mcp.tool()
     def get_free_busy(
         email: str,
         start_date: str | None = None,
