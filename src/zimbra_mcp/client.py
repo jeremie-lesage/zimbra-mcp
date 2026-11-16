@@ -468,6 +468,27 @@ class ZimbraClient:
         }
         return self.request("MsgActionRequest", "urn:zimbraMail", params)
 
+    def get_message_headers(self, msg_id: str, names: list[str]) -> dict[str, list[str]]:
+        """Retrieve the given headers of a message.
+
+        Args:
+            msg_id: Message ID
+            names: Header names
+
+        Returns:
+            Values by lowercase header name; a missing header is absent
+        """
+        params = {"m": {"id": msg_id, "header": [{"n": name} for name in names]}}
+        result = self.request("GetMsgRequest", "urn:zimbraMail", params)
+        message = result.get("m", {})
+        if isinstance(message, list):
+            message = message[0] if message else {}
+        headers: dict[str, list[str]] = {}
+        for name, value in (message.get("_attrs") or {}).items():
+            values = value if isinstance(value, list) else [value]
+            headers.setdefault(name.lower(), []).extend(str(v) for v in values)
+        return headers
+
     def get_filter_rules(self) -> list[dict[str, Any]]:
         """Retrieve the incoming filter rules, in execution order, as returned by Zimbra."""
         result = self.request("GetFilterRulesRequest", "urn:zimbraMail")

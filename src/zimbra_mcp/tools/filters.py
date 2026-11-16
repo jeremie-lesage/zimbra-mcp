@@ -1,6 +1,9 @@
 """MCP tools for Zimbra incoming mail filters."""
 
 import copy
+import re
+from email.header import decode_header, make_header
+from email.utils import getaddresses
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -33,6 +36,80 @@ def register_filter_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConf
             "count": len(rules),
             "filters": [_summarize_rule(rule) for rule in rules],
             "write_enabled": bool(config and config.enable_filters),
+        }
+
+    @mcp.tool()
+    def find_matching_filters(
+        msg_id: str | None = None,
+        sender: str | None = None,
+        subject: str | None = None,
+        list_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Show which filters would catch an email, in order, without applying any action.
+
+        Use it before adding a filter or a condition: if an earlier filter already
+        catches the email and stops processing, a filter placed after it never applies.
+
+        Give msg_id to test a received email, or sender (and optionally subject and
+        list_id) to test a hypothetical one. Conditions on the body, size, date or
+        address book cannot be evaluated: such filters are reported as "unknown".
+        Server-side spam filtering is not covered.
+
+        Args:
+            msg_id: ID of a received email
+            sender: From address of a hypothetical email
+            subject: Subject of a hypothetical email
+            list_id: List-Id header of a hypothetical email
+
+        Returns:
+            The filters that match (or may match), the one that stops processing, and
+            the number of filters never reached
+        """
+        if (msg_id is None) == (sender is None):
+            return {"success": False, "error": "Give either msg_id or sender."}
+
+        rules = client.get_filter_rules()
+        if msg_id is not None:
+            headers = client.get_message_headers(msg_id, sorted(_rule_header_names(rules) | {"from", "subject"}))
+        else:
+            headers = {"from": [sender]}
+            if subject:
+                headers["subject"] = [subject]
+            if list_id:
+                headers["list-id"] = [list_id]
+
+        matches = []
+        stopped_by = None
+        for position, rule in enumerate(rules, start=1):
+            if not rule.get("active", True):
+                continue
+            result, matched, unsupported = _evaluate_rule(rule, headers)
+            if result is False:
+                continue
+            stops = _stops(rule)
+            matches.append({
+                "position": position,
+                "name": rule.get("name"),
+                "result": "match" if result else "unknown",
+                "stops": stops,
+                "matched_conditions": matched,
+                "unsupported_conditions": unsupported,
+                "actions": _flatten(rule.get("filterActions"), ()),
+            })
+            if result and stops:
+                stopped_by = rule.get("name")
+                break
+
+        return {
+            "success": True,
+            "email": {
+                "from": headers.get("from", []),
+                "subject": headers.get("subject", []),
+                "list_id": headers.get("list-id", []),
+            },
+            "matches": matches,
+            "stopped_by": stopped_by,
+            "not_reached": len(rules) - matches[-1]["position"] if stopped_by else 0,
         }
 
     if not (config and config.enable_filters):
@@ -366,6 +443,110 @@ def _find_rule(rules: list[dict[str, Any]], name: str) -> int | None:
         if rule.get("name") == name:
             return index
     return None
+
+
+def _test_entries(rule: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    entries = []
+    for block in _as_list(rule.get("filterTests")):
+        for kind, values in block.items():
+            if kind == "condition":
+                continue
+            entries.extend((kind, entry) for entry in _as_list(values) if isinstance(entry, dict))
+    return entries
+
+
+def _header_list(entry: dict[str, Any]) -> list[str]:
+    return [h.strip().lower() for h in str(entry.get("header", "")).split(",") if h.strip()]
+
+
+def _rule_header_names(rules: list[dict[str, Any]]) -> set[str]:
+    names = set()
+    for rule in rules:
+        for _, entry in _test_entries(rule):
+            names.update(_header_list(entry))
+    return names
+
+
+def _stops(rule: dict[str, Any]) -> bool:
+    return any("actionStop" in block for block in _as_list(rule.get("filterActions")))
+
+
+def _decode(value: str) -> str:
+    if "=?" not in value:
+        return value
+    try:
+        return str(make_header(decode_header(value)))
+    except (ValueError, LookupError):
+        return value
+
+
+def _compare(comparison: str, key: str, value: str, case_sensitive: bool) -> bool:
+    if not case_sensitive:
+        key, value = key.lower(), value.lower()
+    if comparison == "is":
+        return value == key
+    if comparison == "contains":
+        return key in value
+    pattern = re.escape(key).replace(r"\*", ".*").replace(r"\?", ".")
+    return re.fullmatch(pattern, value, re.DOTALL) is not None
+
+
+def _address_part(address: str, part: str) -> str:
+    local, _, domain = address.rpartition("@")
+    if part == "domain":
+        return domain
+    if part == "localpart":
+        return local or domain
+    return address
+
+
+def _evaluate_test(kind: str, entry: dict[str, Any], headers: dict[str, list[str]]) -> bool | None:
+    names = _header_list(entry)
+    raw = [_decode(v) for name in names for v in headers.get(name, [])]
+
+    if kind == "existsTest":
+        result = bool(raw)
+    elif kind in ("headerTest", "addressTest"):
+        comparison = entry.get("stringComparison")
+        if comparison not in ("is", "contains", "matches"):
+            return None
+        values = raw
+        if kind == "addressTest":
+            part = entry.get("part", "all")
+            values = [_address_part(addr, part) for _, addr in getaddresses(raw) if addr]
+        key = str(entry.get("value", ""))
+        case_sensitive = bool(entry.get("caseSensitive", False))
+        result = any(_compare(comparison, key, v, case_sensitive) for v in values)
+    else:
+        return None
+
+    return not result if entry.get("negative") else result
+
+
+def _evaluate_rule(
+    rule: dict[str, Any], headers: dict[str, list[str]]
+) -> tuple[bool | None, list[dict[str, Any]], list[str]]:
+    results = []
+    matched = []
+    unsupported_kinds = set()
+    for kind, entry in _test_entries(rule):
+        result = _evaluate_test(kind, entry, headers)
+        results.append(result)
+        if result is None:
+            unsupported_kinds.add(kind)
+        elif result:
+            matched.append({"type": kind, **{k: v for k, v in entry.items() if k != "index"}})
+    unsupported = sorted(unsupported_kinds)
+
+    if not results:
+        return None, matched, unsupported
+    if _condition(rule) == "anyof":
+        if any(r is True for r in results):
+            return True, matched, unsupported
+        return (None if None in results else False), matched, unsupported
+    if any(r is False for r in results):
+        return False, matched, unsupported
+    return (None if None in results else True), matched, unsupported
 
 
 def _target_index(rules: list[dict[str, Any]], before: str | None, position: int | None) -> int | str:

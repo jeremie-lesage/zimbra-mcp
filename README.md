@@ -1,6 +1,6 @@
 # Zimbra MCP Server
 
-MCP (Model Context Protocol) server for Zimbra to manage emails, tags, calendar, and contacts.
+MCP (Model Context Protocol) server for Zimbra to manage emails, tags, mail filters, calendar, and contacts.
 
 ## Installation
 
@@ -40,7 +40,7 @@ ZIMBRA_ENABLE_SEND=false
 | `ZIMBRA_TIMEOUT` | Request timeout in seconds (SOAP, auth and downloads) | `30` |
 | `ZIMBRA_ENABLE_SEND` | Enable `send_email` tool (`true`/`1`/`yes`) | `false` |
 | `ZIMBRA_ENABLE_HARD_DELETE` | Allow permanent deletion of emails/contacts (`hard_delete=True`) | `false` |
-| `ZIMBRA_ENABLE_FILTERS` | Enable `add_filter`, `update_filter` and `delete_filter` | `false` |
+| `ZIMBRA_ENABLE_FILTERS` | Enable the filter write tools (`add_filter`, `move_filter`, `update_filter`, `delete_filter`, `add_filter_condition`, `remove_filter_condition`) | `false` |
 | `ZIMBRA_DOWNLOAD_DIR` | When set, the only directory `download_attachment` may write into | (unset) |
 | `ZIMBRA_MAX_ATTACHMENT_MB` | Maximum attachment size downloaded | `50` |
 | `ZIMBRA_ALLOW_INSECURE_HTTP` | Accept a plain `http://` `ZIMBRA_URL` (credentials sent unencrypted) | `false` |
@@ -168,6 +168,7 @@ Available colors: blue, cyan, green, purple, red, yellow, pink, gray, orange
 | Tool | Description |
 |------|-------------|
 | `list_filters` | List incoming mail filters in execution order |
+| `find_matching_filters` | Show which filters would catch an email (received or hypothetical) and which one stops processing, without applying anything |
 | `add_filter` | Add a filter, at the end of the list or at a given place (opt-in, requires `ZIMBRA_ENABLE_FILTERS=true`) |
 | `move_filter` | Move a filter before another one or to a position (opt-in) |
 | `update_filter` | Rename, enable/disable, or replace the conditions or actions of a filter (opt-in) |
@@ -178,6 +179,8 @@ Available colors: blue, cyan, green, purple, red, yellow, pink, gray, orange
 Conditions: sender, sender domain (`add_filter_condition` and `remove_filter_condition` only), subject, `List-Id` header (all "contains"), matched with `all` or `any`. Actions: move to a folder, tag, mark as read, move to the Trash, stop processing the next filters. Filters are identified by their name.
 
 Zimbra only accepts the whole filter list on write: each write tool reads the list, changes one filter and sends the list back, leaving the other filters untouched, including conditions and actions these tools cannot create. A change made in the web client between that read and that write is lost.
+
+Zimbra has no dry run for filters, so `find_matching_filters` evaluates them itself from the email headers. Conditions on the body, size, date or address book cannot be evaluated: the filter is then reported as `unknown`, never as not matching.
 
 ### Calendar
 

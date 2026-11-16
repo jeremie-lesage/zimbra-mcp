@@ -11,6 +11,8 @@ from zimbra_mcp.errors import ZimbraNotFoundError
 from zimbra_mcp.tools.filters import (
     _build_actions,
     _build_tests,
+    _evaluate_rule,
+    _evaluate_test,
     _single_condition,
     _summarize_rule,
     _target_index,
@@ -65,17 +67,17 @@ def _written(client):
 class TestRegistration:
     def test_read_only_by_default(self, connected_client):
         tools = capture_tools(register_filter_tools, connected_client)
-        assert set(tools) == {"list_filters"}
+        assert set(tools) == {"list_filters", "find_matching_filters"}
 
     def test_read_only_when_disabled(self, connected_client):
         cfg = ZimbraConfig(url="https://z.test", user="u", password="p", enable_filters=False)
         tools = capture_tools(register_filter_tools, connected_client, cfg)
-        assert set(tools) == {"list_filters"}
+        assert set(tools) == {"list_filters", "find_matching_filters"}
 
     def test_write_tools_when_enabled(self, connected_client):
         tools = capture_tools(register_filter_tools, connected_client, _enabled())
         assert set(tools) == {
-            "list_filters", "add_filter", "update_filter", "delete_filter",
+            "list_filters", "find_matching_filters", "add_filter", "update_filter", "delete_filter",
             "add_filter_condition", "remove_filter_condition", "move_filter",
         }
 
@@ -396,6 +398,156 @@ class TestRemoveFilterCondition:
         assert result["success"] is False
         assert "delete_filter" in result["error"]
         client.modify_filter_rules.assert_not_called()
+
+
+def _rule(name, condition, tests, stop=True, active=True):
+    actions = {"actionFileInto": [{"index": 0, "folderPath": name}]}
+    if stop:
+        actions["actionStop"] = [{"index": 1}]
+    return {"name": name, "active": active, "filterTests": [{"condition": condition, **tests}], "filterActions": [actions]}
+
+
+def _addr(value, part="all", comparison="contains", **extra):
+    return {"index": 0, "header": "from", "part": part, "stringComparison": comparison, "value": value, **extra}
+
+
+def _hdr(header, value, comparison="contains", **extra):
+    return {"index": 0, "header": header, "stringComparison": comparison, "value": value, **extra}
+
+
+class TestEvaluateTest:
+    HEADERS = {
+        "from": ["Bob Martin <Bob@Spammer.com>"],
+        "subject": ["=?utf-8?q?Offre_sp=C3=A9ciale?="],
+        "list-id": ["<news.spammer.com>"],
+    }
+
+    @pytest.mark.parametrize("entry,expected", [
+        (_addr("spammer.com", part="domain"), True),
+        (_addr("bob", part="localpart", comparison="is"), True),
+        (_addr("bob@spammer.com", comparison="is"), True),
+        (_addr("martin"), False),
+        (_addr("*@spammer.*", comparison="matches"), True),
+        (_addr("b?b@*", comparison="matches"), True),
+        (_addr("Bob", caseSensitive=False), True),
+        (_addr("bob", caseSensitive=True), False),
+        (_addr("spammer.com", part="domain", negative=True), False),
+    ])
+    def test_address(self, entry, expected):
+        assert _evaluate_test("addressTest", entry, self.HEADERS) is expected
+
+    def test_header_decodes_encoded_words(self):
+        assert _evaluate_test("headerTest", _hdr("subject", "spéciale"), self.HEADERS) is True
+
+    def test_header_name_is_case_insensitive_and_can_be_a_list(self):
+        assert _evaluate_test("headerTest", _hdr("List-ID", "news.spammer"), self.HEADERS) is True
+        assert _evaluate_test("headerTest", _hdr("to,list-id", "news.spammer"), self.HEADERS) is True
+
+    def test_missing_header(self):
+        assert _evaluate_test("headerTest", _hdr("X-Spam", "yes"), self.HEADERS) is False
+        assert _evaluate_test("headerTest", _hdr("X-Spam", "yes", negative=True), self.HEADERS) is True
+
+    def test_exists(self):
+        assert _evaluate_test("existsTest", {"header": "list-id"}, self.HEADERS) is True
+        assert _evaluate_test("existsTest", {"header": "x-spam"}, self.HEADERS) is False
+
+    def test_unsupported(self):
+        assert _evaluate_test("bodyTest", {"value": "x"}, self.HEADERS) is None
+        assert _evaluate_test("headerTest", {"header": "subject", "countComparison": "gt", "value": "1"}, self.HEADERS) is None
+
+
+class TestEvaluateRule:
+    HEADERS = {"from": ["bob@spammer.com"], "subject": ["Hello"]}
+
+    def test_anyof(self):
+        rule = _rule("R", "anyof", {"addressTest": [_addr("other.com"), _addr("spammer.com")]})
+        result, matched, unsupported = _evaluate_rule(rule, self.HEADERS)
+        assert result is True
+        assert [m["value"] for m in matched] == ["spammer.com"]
+        assert unsupported == []
+
+    def test_allof(self):
+        rule = _rule("R", "allof", {"addressTest": [_addr("spammer.com")], "headerTest": [_hdr("subject", "promo")]})
+        assert _evaluate_rule(rule, self.HEADERS)[0] is False
+
+    def test_unknown_propagates(self):
+        anyof = _rule("R", "anyof", {"addressTest": [_addr("other.com")], "bodyTest": [{"value": "x"}]})
+        assert _evaluate_rule(anyof, self.HEADERS)[0] is None
+        assert _evaluate_rule(anyof, self.HEADERS)[2] == ["bodyTest"]
+        allof = _rule("R", "allof", {"addressTest": [_addr("spammer.com")], "bodyTest": [{"value": "x"}]})
+        assert _evaluate_rule(allof, self.HEADERS)[0] is None
+
+    def test_known_result_wins_over_unknown(self):
+        anyof = _rule("R", "anyof", {"addressTest": [_addr("spammer.com")], "bodyTest": [{"value": "x"}]})
+        assert _evaluate_rule(anyof, self.HEADERS)[0] is True
+        allof = _rule("R", "allof", {"addressTest": [_addr("other.com")], "bodyTest": [{"value": "x"}]})
+        assert _evaluate_rule(allof, self.HEADERS)[0] is False
+
+
+class TestFindMatchingFilters:
+    RULES = [
+        _rule("Inactive", "anyof", {"addressTest": [_addr("spammer.com")]}, active=False),
+        _rule("Body", "anyof", {"bodyTest": [{"index": 0, "value": "promo"}]}),
+        _rule("Tag only", "anyof", {"addressTest": [_addr("spammer.com", part="domain")]}, stop=False),
+        _rule("SPAM", "anyof", {"addressTest": [_addr("nope.com"), _addr("spammer.com")]}),
+        _rule("Later", "anyof", {"addressTest": [_addr("spammer.com")]}),
+        _rule("Other", "anyof", {"addressTest": [_addr("other.com")]}),
+    ]
+
+    @pytest.fixture
+    def tools(self, connected_client):
+        connected_client.get_filter_rules = MagicMock(return_value=self.RULES)
+        connected_client.get_message_headers = MagicMock(return_value={"from": ["Bob <bob@spammer.com>"]})
+        return capture_tools(register_filter_tools, connected_client), connected_client
+
+    def test_registered_without_write_flag(self, tools):
+        assert "find_matching_filters" in tools[0]
+
+    def test_hypothetical_sender(self, tools):
+        tools, _ = tools
+        result = tools["find_matching_filters"](sender="bob@spammer.com")
+        assert [(m["name"], m["result"], m["stops"]) for m in result["matches"]] == [
+            ("Body", "unknown", True),
+            ("Tag only", "match", False),
+            ("SPAM", "match", True),
+        ]
+        assert result["stopped_by"] == "SPAM"
+        assert result["not_reached"] == 2
+        assert result["matches"][2]["position"] == 4
+        assert [c["value"] for c in result["matches"][2]["matched_conditions"]] == ["spammer.com"]
+
+    def test_no_match(self, tools):
+        tools, _ = tools
+        result = tools["find_matching_filters"](sender="alice@example.org")
+        assert [m["name"] for m in result["matches"]] == ["Body"]
+        assert result["stopped_by"] is None
+        assert result["not_reached"] == 0
+
+    def test_message_requests_only_used_headers(self, tools):
+        tools, client = tools
+        result = tools["find_matching_filters"](msg_id="42")
+        client.get_message_headers.assert_called_once_with("42", ["from", "subject"])
+        assert result["stopped_by"] == "SPAM"
+
+    def test_needs_exactly_one_source(self, tools):
+        tools, _ = tools
+        assert tools["find_matching_filters"]()["success"] is False
+        assert tools["find_matching_filters"](msg_id="1", sender="a@b.c")["success"] is False
+
+
+class TestGetMessageHeaders:
+    def test_normalizes_names_and_lists(self, connected_client):
+        connected_client.request = MagicMock(return_value={"m": [{"id": "1", "_attrs": {
+            "From": "Bob <bob@a.com>", "Received": ["r1", "r2"],
+        }}]})
+        headers = connected_client.get_message_headers("1", ["From", "Received", "List-Id"])
+        assert headers == {"from": ["Bob <bob@a.com>"], "received": ["r1", "r2"]}
+        params = connected_client.request.call_args[0][2]
+        assert params == {"m": {"id": "1", "header": [{"n": "From"}, {"n": "Received"}, {"n": "List-Id"}]}}
+
+    def test_no_attrs(self, connected_client):
+        connected_client.request = MagicMock(return_value={"m": {"id": "1"}})
+        assert connected_client.get_message_headers("1", ["From"]) == {}
 
 
 class TestDeleteFilter:
