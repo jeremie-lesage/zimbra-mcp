@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -13,6 +14,8 @@ from zimbra_mcp.tools.calendar import (
     _parse_input_datetime,
     _parse_zimbra_date,
     _text,
+    _wall_time,
+    _zone,
     register_calendar_tools,
 )
 
@@ -389,6 +392,52 @@ class TestUpdateEvent:
         assert tools["update_event"]("800", private=True)["success"] is False
         client.modify_appointment.assert_not_called()
 
+    def test_utc_times_read_in_account_zone(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt({
+            "s": [{"d": "20300715T080000Z"}], "e": [{"d": "20300715T083000Z"}],
+        }))
+        client.get_timezone = MagicMock(return_value="Europe/Brussels")
+        client.modify_appointment = MagicMock(return_value={})
+
+        tools["update_event"]("800", start_datetime="2030-07-15 15:00")
+
+        comp = self._sent(client)[1]["comp"]
+        assert comp["s"] == {"d": "20300715T150000"}
+        assert comp["e"] == {"d": "20300715T153000"}
+
+    def test_mixed_utc_and_local_end_check(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt({
+            "s": [{"d": "20300715T080000Z"}], "e": [{"d": "20300715T090000Z"}],
+        }))
+        client.get_timezone = MagicMock(return_value="Europe/Brussels")
+        client.modify_appointment = MagicMock(return_value={})
+
+        assert tools["update_event"]("800", end_datetime="2030-07-15 09:30")["success"] is False
+        tools["update_event"]("800", end_datetime="2030-07-15 10:30")
+        comp = self._sent(client)[1]["comp"]
+        assert comp["s"] == {"d": "20300715T080000Z"}
+        assert comp["e"] == {"d": "20300715T103000"}
+
+    def test_account_zone_not_fetched_without_utc(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt())
+        client.get_timezone = MagicMock()
+        client.modify_appointment = MagicMock(return_value={})
+
+        tools["update_event"]("800", start_datetime="2030-01-16 14:00")
+
+        client.get_timezone.assert_not_called()
+
+    def test_invalid_date(self, cal_tools):
+        tools, client = cal_tools
+        client.get_appointment = MagicMock(return_value=_appt())
+        client.modify_appointment = MagicMock()
+
+        assert tools["update_event"]("800", start_datetime="tomorrow")["success"] is False
+        client.modify_appointment.assert_not_called()
+
     def test_attendees_warning(self, cal_tools):
         tools, client = cal_tools
         client.get_appointment = MagicMock(return_value=_appt({"at": [{"a": "alice@test.com"}]}))
@@ -410,6 +459,22 @@ class TestUpdateEvent:
 )
 def test_parse_zimbra_date(value, expected):
     assert _parse_zimbra_date(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [("Europe/Paris", ZoneInfo("Europe/Paris")), ("Not/AZone", None), ("", None), (None, None)],
+)
+def test_zone(name, expected):
+    assert _zone(name) == expected
+
+
+def test_wall_time():
+    zone = ZoneInfo("Europe/Brussels")
+    assert _wall_time("20300715T080000Z", zone) == datetime(2030, 7, 15, 10, 0)
+    assert _wall_time("20300115T080000Z", zone) == datetime(2030, 1, 15, 9, 0)
+    assert _wall_time("20300715T080000", zone) == datetime(2030, 7, 15, 8, 0)
+    assert _wall_time("20300715T080000Z", None) == datetime(2030, 7, 15, 8, 0)
 
 
 def test_parse_input_datetime_rejects_garbage():

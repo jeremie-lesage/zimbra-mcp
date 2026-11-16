@@ -1,7 +1,8 @@
 """MCP tools for Zimbra calendar management."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mcp.server.fastmcp import FastMCP
 
@@ -248,9 +249,14 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             return {"success": False, "error": "Only events you organize can be modified"}
 
         all_day = _is_true(comp.get("allDay"))
-        start, end = _reschedule(_first(comp.get("s")), _first(comp.get("e")), start_datetime, end_datetime, all_day)
-        if end["d"] < start["d"]:
-            return {"success": False, "error": "The event would end before it starts"}
+        old_start, old_end = _first(comp.get("s")), _first(comp.get("e"))
+        zone = None
+        if (start_datetime or end_datetime) and _has_utc_time(old_start, old_end):
+            zone = _zone(client.get_timezone())
+        try:
+            start, end = _reschedule(old_start, old_end, start_datetime, end_datetime, all_day, zone)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
 
         new_comp = {key: comp[key] for key in _WRITABLE_COMP_KEYS if key in comp}
         new_comp["s"] = start
@@ -413,32 +419,65 @@ def _parse_zimbra_date(value: str) -> datetime:
     return datetime.strptime(value, "%Y%m%dT%H%M%S")
 
 
+def _has_utc_time(*elements: dict[str, Any]) -> bool:
+    """Tell whether one of the date elements is in UTC ("...Z")."""
+    return any(str(element.get("d", "")).endswith("Z") for element in elements)
+
+
+def _zone(name: str | None) -> ZoneInfo | None:
+    """Return the time zone named by an IANA ID, or None when it is unknown."""
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        return None
+
+
+def _wall_time(value: str, zone: ZoneInfo | None) -> datetime:
+    """Parse a Zimbra date, converting a UTC one to the wall time of the given zone."""
+    parsed = _parse_zimbra_date(value)
+    if not value.endswith("Z") or zone is None:
+        return parsed
+    return parsed.replace(tzinfo=timezone.utc).astimezone(zone).replace(tzinfo=None)
+
+
 def _reschedule(
     start: dict[str, Any],
     end: dict[str, Any],
     start_input: str | None,
     end_input: str | None,
     all_day: bool,
+    zone: ZoneInfo | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return the new start and end elements, keeping the time zone and, without a new end, the duration."""
+    """Return the new start and end elements, keeping the time zone and, without a new end, the duration.
+
+    Raises:
+        ValueError: A date cannot be parsed, or the event would end before it starts
+    """
     end = end or start
     fmt = "%Y%m%d" if all_day else "%Y%m%dT%H%M%S"
 
     def element(original: dict[str, Any], when: datetime | None) -> dict[str, Any]:
-        new = {key: original[key] for key in ("d", "tz") if key in original}
-        if when is not None:
-            new["d"] = when.strftime(fmt)
+        if when is None:
+            return {key: original[key] for key in ("d", "tz") if key in original}
+        new = {"d": when.strftime(fmt)}
+        if "tz" in original:
+            new["tz"] = original["tz"]
         return new
 
     if start_input is None and end_input is None:
         return element(start, None), element(end, None)
 
-    old_start = _parse_zimbra_date(start["d"])
+    old_start = _wall_time(start["d"], zone)
+    old_end = _wall_time(end["d"], zone)
     new_start = _parse_input_datetime(start_input, all_day) if start_input else old_start
     if end_input:
         new_end = _parse_input_datetime(end_input, all_day)
+    elif start_input:
+        new_end = new_start + (old_end - old_start)
     else:
-        new_end = new_start + (_parse_zimbra_date(end["d"]) - old_start)
+        new_end = old_end
+    if new_end < new_start:
+        raise ValueError("The event would end before it starts")
     return element(start, new_start if start_input else None), element(end, new_end)
 
 

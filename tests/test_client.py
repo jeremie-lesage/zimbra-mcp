@@ -651,6 +651,20 @@ class TestModifyAppointment:
         assert "mp" not in params["m"]
 
 
+class TestGetTimezone:
+    def test_reads_pref(self, connected_client):
+        resp = _make_ok_response("GetPrefsResponse", {"_attrs": {"zimbraPrefTimeZoneId": "Europe/Brussels"}})
+        _setup_response(connected_client, resp)
+
+        assert connected_client.get_timezone() == "Europe/Brussels"
+        assert _get_request_params(connected_client) == {"pref": {"name": "zimbraPrefTimeZoneId"}}
+
+    def test_missing_pref(self, connected_client):
+        _setup_response(connected_client, _make_ok_response("GetPrefsResponse", {}))
+
+        assert connected_client.get_timezone() is None
+
+
 class TestGetFreeBusy:
     def test_params(self, connected_client):
         resp = _make_ok_response("GetFreeBusyResponse", {"usr": []})

@@ -646,6 +646,12 @@ class ZimbraClient:
         params = {"id": invite_id, "comp": "0", "m": m}
         return self.request("ModifyAppointmentRequest", "urn:zimbraMail", params)
 
+    def get_timezone(self) -> str | None:
+        """Return the time zone ID set in the account preferences (zimbraPrefTimeZoneId)."""
+        params = {"pref": {"name": "zimbraPrefTimeZoneId"}}
+        response = self.request("GetPrefsRequest", "urn:zimbraAccount", params)
+        return (response.get("_attrs") or {}).get("zimbraPrefTimeZoneId")
+
     def get_free_busy(
         self,
         email: str,
