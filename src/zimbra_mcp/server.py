@@ -14,6 +14,7 @@ from zimbra_mcp.tools import (
     register_calendar_tools,
     register_contact_tools,
     register_email_tools,
+    register_filter_tools,
     register_tag_tools,
 )
 
@@ -38,7 +39,8 @@ async def lifespan(mcp: FastMCP) -> AsyncIterator[dict]:
         register_calendar_tools(mcp, client)
         register_contact_tools(mcp, client)
         register_auth_tools(mcp, client)
-        logger.info("Tools registered: emails, tags, calendar, contacts, auth")
+        register_filter_tools(mcp, client, config)
+        logger.info("Tools registered: emails, tags, calendar, contacts, auth, filters")
 
         try:
             client.connect()

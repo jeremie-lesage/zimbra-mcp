@@ -37,6 +37,7 @@ class ZimbraConfig:
     timeout: int = 30
     enable_send: bool = False
     enable_hard_delete: bool = False
+    enable_filters: bool = False
     download_dir: Path | None = None
     max_attachment_bytes: int = 50 * 1024 * 1024
     allow_insecure_http: bool = False
@@ -84,6 +85,7 @@ class ZimbraConfig:
             timeout=_env_int("ZIMBRA_TIMEOUT", 30),
             enable_send=_env_flag("ZIMBRA_ENABLE_SEND"),
             enable_hard_delete=_env_flag("ZIMBRA_ENABLE_HARD_DELETE"),
+            enable_filters=_env_flag("ZIMBRA_ENABLE_FILTERS"),
             download_dir=Path(download_dir) if download_dir else None,
             max_attachment_bytes=_env_int("ZIMBRA_MAX_ATTACHMENT_MB", 50) * 1024 * 1024,
             allow_insecure_http=_env_flag("ZIMBRA_ALLOW_INSECURE_HTTP"),

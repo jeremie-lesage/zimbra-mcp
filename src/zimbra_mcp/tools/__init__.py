@@ -4,6 +4,7 @@ from zimbra_mcp.tools.auth import register_auth_tools
 from zimbra_mcp.tools.calendar import register_calendar_tools
 from zimbra_mcp.tools.contacts import register_contact_tools
 from zimbra_mcp.tools.emails import register_email_tools
+from zimbra_mcp.tools.filters import register_filter_tools
 from zimbra_mcp.tools.tags import register_tag_tools
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "register_tag_tools",
     "register_calendar_tools",
     "register_contact_tools",
+    "register_filter_tools",
 ]

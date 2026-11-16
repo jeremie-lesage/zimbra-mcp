@@ -40,6 +40,7 @@ ZIMBRA_ENABLE_SEND=false
 | `ZIMBRA_TIMEOUT` | Request timeout in seconds (SOAP, auth and downloads) | `30` |
 | `ZIMBRA_ENABLE_SEND` | Enable `send_email` tool (`true`/`1`/`yes`) | `false` |
 | `ZIMBRA_ENABLE_HARD_DELETE` | Allow permanent deletion of emails/contacts (`hard_delete=True`) | `false` |
+| `ZIMBRA_ENABLE_FILTERS` | Enable `add_filter`, `update_filter` and `delete_filter` | `false` |
 | `ZIMBRA_DOWNLOAD_DIR` | When set, the only directory `download_attachment` may write into | (unset) |
 | `ZIMBRA_MAX_ATTACHMENT_MB` | Maximum attachment size downloaded | `50` |
 | `ZIMBRA_ALLOW_INSECURE_HTTP` | Accept a plain `http://` `ZIMBRA_URL` (credentials sent unencrypted) | `false` |
@@ -162,6 +163,19 @@ Examples:
 
 Available colors: blue, cyan, green, purple, red, yellow, pink, gray, orange
 
+### Filters
+
+| Tool | Description |
+|------|-------------|
+| `list_filters` | List incoming mail filters in execution order |
+| `add_filter` | Add a filter at the end of the list (opt-in, requires `ZIMBRA_ENABLE_FILTERS=true`) |
+| `update_filter` | Rename, enable/disable, or replace the conditions or actions of a filter (opt-in) |
+| `delete_filter` | Delete a filter (opt-in) |
+
+Conditions: sender, subject, `List-Id` header (all "contains"), matched with `all` or `any`. Actions: move to a folder, tag, mark as read, move to the Trash, stop processing the next filters. Filters are identified by their name.
+
+Zimbra only accepts the whole filter list on write: each write tool reads the list, changes one filter and sends the list back, leaving the other filters untouched, including conditions and actions these tools cannot create. A change made in the web client between that read and that write is lost.
+
 ### Calendar
 
 | Tool | Description |
@@ -177,6 +191,7 @@ The content of emails is controlled by their senders. A malicious email can cont
 
 - **No sending by default**: `send_email` only exists when `ZIMBRA_ENABLE_SEND=true`. Drafts are always safe to create.
 - **No irreversible deletion by default**: `hard_delete=True` is refused unless `ZIMBRA_ENABLE_HARD_DELETE=true`; emails and contacts go to the Trash.
+- **No filter changes by default**: a filter acts on every future email, so the filter write tools only exist when `ZIMBRA_ENABLE_FILTERS=true`. They never discard, redirect or reply: "delete" means moving to the Trash.
 - **File writes**: `download_attachment` strips any path from the file name (`../../.bashrc` becomes `bashrc`), never overwrites an existing file and caps the size (`ZIMBRA_MAX_ATTACHMENT_MB`). Set `ZIMBRA_DOWNLOAD_DIR` to confine writes to a single directory.
 - **Credentials**: HTTPS is required unless explicitly overridden; the auth token is sent as a cookie (never in a URL that could end up in proxy logs), redirects are refused so it cannot be forwarded to another host; the password is never included in `repr()`.
 - **Timeouts** on every request, so a hung server cannot block the MCP client forever.
@@ -242,6 +257,7 @@ zimbra-mcp/
 │           ├── auth.py        # Two-factor login tools
 │           ├── emails.py      # Email tools
 │           ├── tags.py        # Tag tools
+│           ├── filters.py     # Mail filter tools
 │           ├── contacts.py    # Contact tools
 │           └── calendar.py    # Calendar tools
 └── tests/
@@ -253,6 +269,7 @@ zimbra-mcp/
         ├── test_auth.py
         ├── test_emails.py
         ├── test_tags.py
+        ├── test_filters.py
         ├── test_contacts.py
         └── test_calendar.py
 ```

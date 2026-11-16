@@ -468,6 +468,26 @@ class ZimbraClient:
         }
         return self.request("MsgActionRequest", "urn:zimbraMail", params)
 
+    def get_filter_rules(self) -> list[dict[str, Any]]:
+        """Retrieve the incoming filter rules, in execution order, as returned by Zimbra."""
+        result = self.request("GetFilterRulesRequest", "urn:zimbraMail")
+        rules = (result.get("filterRules") or {}).get("filterRule", [])
+        if not isinstance(rules, list):
+            rules = [rules]
+        return rules
+
+    def modify_filter_rules(self, rules: list[dict[str, Any]]) -> dict[str, Any]:
+        """Replace the whole list of incoming filter rules.
+
+        Args:
+            rules: Complete list of rules, in execution order
+
+        Returns:
+            Zimbra response
+        """
+        params = {"filterRules": {"filterRule": rules}}
+        return self.request("ModifyFilterRulesRequest", "urn:zimbraMail", params)
+
     def search_calendar(
         self,
         start_time: int,
