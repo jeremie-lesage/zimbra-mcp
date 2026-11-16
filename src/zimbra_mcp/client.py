@@ -607,9 +607,6 @@ class ZimbraClient:
         if location:
             inv["comp"]["loc"] = location
 
-        if description:
-            inv["comp"]["desc"] = description
-
         if attendees:
             inv["comp"]["at"] = [{"a": addr, "role": "REQ"} for addr in attendees]
 
@@ -620,6 +617,8 @@ class ZimbraClient:
             inv["comp"]["class"] = "PRI"
 
         params = {"m": {"inv": inv, "su": subject}}
+        if description:
+            params["m"]["mp"] = _body_part(description, None)
         return self.request("CreateAppointmentRequest", "urn:zimbraMail", params)
 
     def get_free_busy(

@@ -605,6 +605,17 @@ class TestCreateAppointment:
         params = _get_request_params(connected_client)
         assert params["m"]["inv"]["comp"]["class"] == "PRI"
 
+    def test_description_in_body(self, connected_client):
+        resp = _make_ok_response("CreateAppointmentResponse", {"calItemId": "703"})
+        _setup_response(connected_client, resp)
+
+        connected_client.create_appointment(
+            subject="Meeting", start_time=1705312200000, end_time=1705315800000, description="Agenda",
+        )
+        params = _get_request_params(connected_client)
+        assert params["m"]["mp"] == {"ct": "text/plain", "content": "Agenda"}
+        assert "desc" not in params["m"]["inv"]["comp"]
+
     def test_with_attendees(self, connected_client):
         resp = _make_ok_response("CreateAppointmentResponse", {"calItemId": "701"})
         _setup_response(connected_client, resp)

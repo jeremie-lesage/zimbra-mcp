@@ -135,7 +135,7 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "uid": comp.get("uid"),
             "name": comp.get("name", "(no title)"),
             "location": comp.get("loc", ""),
-            "description": comp.get("desc", ""),
+            "description": _text(comp.get("desc")),
             "start": start_info.get("d"),
             "end": end_info.get("d"),
             "timezone": start_info.get("tz"),
@@ -299,6 +299,15 @@ def register_calendar_tools(mcp: FastMCP, client: ZimbraClient) -> None:
             "busy_slots": sorted(busy_slots, key=lambda s: s.get("start", "")),
             "free_slots": sorted(free_slots, key=lambda s: s.get("start", "")),
         }
+
+
+def _text(value: Any) -> str:
+    """Return the text of a Zimbra element given as a string, a dict or a list of dicts."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, dict):
+        value = value.get("_content")
+    return value or ""
 
 
 def _is_true(value: Any) -> bool:

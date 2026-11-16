@@ -9,8 +9,17 @@ from zimbra_mcp.tools.calendar import (
     _extract_alarm,
     _is_true,
     _ms_to_datetime,
+    _text,
     register_calendar_tools,
 )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("a", "a"), ({"_content": "a"}, "a"), ([{"_content": "a"}], "a"), ([], ""), ([{}], ""), (None, "")],
+)
+def test_text(value, expected):
+    assert _text(value) == expected
 
 
 @pytest.mark.parametrize(
@@ -151,7 +160,7 @@ class TestGetEventDetails:
                         "uid": "uid-500",
                         "name": "Meeting",
                         "loc": "Room 1",
-                        "desc": "Discuss project",
+                        "desc": [{"_content": "Discuss project"}],
                         "s": [{"d": "20240115T103000"}],
                         "e": [{"d": "20240115T113000"}],
                         "or": {"a": "boss@test.com", "d": "Boss"},
