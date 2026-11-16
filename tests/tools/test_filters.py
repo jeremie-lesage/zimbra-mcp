@@ -230,6 +230,14 @@ class TestTargetIndex:
         assert isinstance(_target_index(self.RULES, "A", 1), str)
 
 
+class TestAddFilterInvalidCondition:
+    def test_writes_nothing(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["add_filter"](name="X", folder="Inbox")["success"] is False
+        assert tools["add_filter"](name="X", sender="a", match="some", folder="Inbox")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+
 class TestAddFilterPlacement:
     def test_before(self, filter_tools):
         tools, client = filter_tools
@@ -319,6 +327,18 @@ class TestUpdateFilter:
         assert tools["update_filter"](name="Nope", active=False)["success"] is False
         client.modify_filter_rules.assert_not_called()
 
+    def test_invalid_input_writes_nothing(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["update_filter"](name="News", new_name="  ")["success"] is False
+        assert tools["update_filter"](name="News", match="some")["success"] is False
+        assert tools["update_filter"](name="News", folder="Inbox", trash=True)["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+    def test_valid_change_is_not_written_when_another_is_invalid(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["update_filter"](name="News", active=True, sender="x", match="some")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
 
 class TestSingleCondition:
     def test_kinds(self):
@@ -399,6 +419,18 @@ class TestRemoveFilterCondition:
         assert "delete_filter" in result["error"]
         client.modify_filter_rules.assert_not_called()
 
+    def test_invalid_input_writes_nothing(self, filter_tools):
+        tools, client = filter_tools
+        assert tools["remove_filter_condition"](name="News")["success"] is False
+        assert tools["remove_filter_condition"](name="Nope", sender="news@a.com")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
+    def test_filter_without_condition_block(self, filter_tools):
+        tools, client = filter_tools
+        client.get_filter_rules.return_value = [{"name": "Empty", "active": True, "filterActions": []}]
+        assert tools["add_filter_condition"](name="Empty", sender="a")["success"] is False
+        client.modify_filter_rules.assert_not_called()
+
 
 def _rule(name, condition, tests, stop=True, active=True):
     actions = {"actionFileInto": [{"index": 0, "folderPath": name}]}
@@ -438,6 +470,10 @@ class TestEvaluateTest:
 
     def test_header_decodes_encoded_words(self):
         assert _evaluate_test("headerTest", _hdr("subject", "spéciale"), self.HEADERS) is True
+
+    def test_invalid_encoded_word_is_kept_as_is(self):
+        headers = {"subject": ["=?unknown-charset?q?abc?="]}
+        assert _evaluate_test("headerTest", _hdr("subject", "unknown-charset"), headers) is True
 
     def test_header_name_is_case_insensitive_and_can_be_a_list(self):
         assert _evaluate_test("headerTest", _hdr("List-ID", "news.spammer"), self.HEADERS) is True
@@ -533,6 +569,23 @@ class TestFindMatchingFilters:
         tools, _ = tools
         assert tools["find_matching_filters"]()["success"] is False
         assert tools["find_matching_filters"](msg_id="1", sender="a@b.c")["success"] is False
+
+    def test_hypothetical_subject_and_list_id(self, connected_client):
+        rules = [
+            _rule("Promo", "allof", {"addressTest": [_addr("shop.com")], "headerTest": [_hdr("subject", "promo")]}),
+            _rule("List", "anyof", {"headerTest": [_hdr("List-Id", "news.shop.com")]}),
+        ]
+        connected_client.get_filter_rules = MagicMock(return_value=rules)
+        tools = capture_tools(register_filter_tools, connected_client)
+        find = tools["find_matching_filters"]
+
+        assert find(sender="a@shop.com")["matches"] == []
+        result = find(sender="a@shop.com", subject="Big PROMO")
+        assert result["stopped_by"] == "Promo"
+        assert result["email"]["subject"] == ["Big PROMO"]
+        result = find(sender="a@other.com", list_id="<news.shop.com>")
+        assert result["stopped_by"] == "List"
+        assert result["email"]["list_id"] == ["<news.shop.com>"]
 
 
 class TestGetMessageHeaders:
