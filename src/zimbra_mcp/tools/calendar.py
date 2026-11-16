@@ -502,6 +502,15 @@ def _ms_to_datetime(ms: int | None) -> str | None:
     return datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
 
 
+_TRIGGER_UNIT_MINUTES = {"w": 7 * 24 * 60, "d": 24 * 60, "h": 60, "m": 1}
+
+
+def _trigger_minutes(rel: dict[str, Any]) -> int:
+    """Return the length of a relative alarm trigger in minutes, whatever its units."""
+    seconds = abs(int(rel.get("s", 0)))
+    return sum(abs(int(rel.get(unit, 0))) * size for unit, size in _TRIGGER_UNIT_MINUTES.items()) + seconds // 60
+
+
 def _extract_alarm(alarms: list | dict) -> dict | None:
     """Extract alarm information."""
     if not alarms:
@@ -516,5 +525,5 @@ def _extract_alarm(alarms: list | dict) -> dict | None:
 
     return {
         "action": alarm.get("action"),
-        "minutes_before": abs(rel.get("m", 0)) if rel else None,
+        "minutes_before": _trigger_minutes(rel) if rel else None,
     }

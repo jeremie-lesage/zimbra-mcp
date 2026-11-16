@@ -59,6 +59,25 @@ class TestExtractAlarm:
         alarms = [{"action": "DISPLAY", "trigger": [{"rel": [{"neg": True, "m": 15, "related": "START"}]}]}]
         assert _extract_alarm(alarms) == {"action": "DISPLAY", "minutes_before": 15}
 
+    @pytest.mark.parametrize(
+        ("rel", "minutes"),
+        [
+            ({"neg": True, "h": 1}, 60),
+            ({"neg": True, "d": 1}, 1440),
+            ({"neg": True, "w": 1}, 10080),
+            ({"neg": True, "h": 1, "m": 30}, 90),
+            ({"neg": True, "s": 120}, 2),
+            ({"neg": True, "m": "5"}, 5),
+        ],
+    )
+    def test_units(self, rel, minutes):
+        alarms = [{"action": "DISPLAY", "trigger": [{"rel": [rel]}]}]
+        assert _extract_alarm(alarms)["minutes_before"] == minutes
+
+    def test_absolute_trigger(self):
+        alarms = [{"action": "DISPLAY", "trigger": [{"abs": [{"d": "20300115T090000Z"}]}]}]
+        assert _extract_alarm(alarms)["minutes_before"] is None
+
     def test_empty(self):
         assert _extract_alarm([]) is None
         assert _extract_alarm({}) is None
