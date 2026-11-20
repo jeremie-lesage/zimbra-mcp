@@ -83,6 +83,7 @@ re-authenticate automatically.
 | `download_attachment` | Download an attachment to a local file (never overwrites, confined to `ZIMBRA_DOWNLOAD_DIR` when set) |
 | `list_folders` | List mail folders, shared folders included, one level at a time: `path` picks the parent, `depth` the number of levels (`None` for the whole tree) |
 | `search_folder` | Search for a folder by name or path (case-insensitive partial match) |
+| `create_folder` | Create a mail folder (`name`, `parent` path or ID, `color`); under a shared folder it is created in the owner's mailbox, and an existing folder is returned with `"created": false` |
 | `move_emails` | Move emails to a folder |
 | `mark_as_read` | Mark emails as read or unread |
 | `delete_emails` | Delete emails (Trash by default; hard delete requires `ZIMBRA_ENABLE_HARD_DELETE=true`) |

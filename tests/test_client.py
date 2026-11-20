@@ -263,6 +263,25 @@ class TestGetFolder:
         assert params["tr"] == 1
 
 
+class TestCreateFolder:
+    def test_params(self, connected_client):
+        resp = _make_ok_response("CreateFolderResponse", {"folder": {"id": "9"}})
+        _setup_response(connected_client, resp)
+
+        result = connected_client.create_folder("Prospects", "abc:2", color=3)
+        params = _get_request_params(connected_client)
+        assert params["folder"] == {"name": "Prospects", "l": "abc:2", "view": "message", "color": 3}
+        assert result["folder"]["id"] == "9"
+
+    def test_no_color(self, connected_client):
+        resp = _make_ok_response("CreateFolderResponse", {"folder": {}})
+        _setup_response(connected_client, resp)
+
+        connected_client.create_folder("Prospects", "1")
+        params = _get_request_params(connected_client)
+        assert "color" not in params["folder"]
+
+
 class TestMoveMessages:
     def test_params(self, connected_client):
         resp = _make_ok_response("MsgActionResponse", {"action": {}})

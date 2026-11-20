@@ -322,6 +322,137 @@ class TestListFoldersTool:
         assert tools["list_folders"](path="Nope")["folders"] == []
 
 
+class TestCreateFolderTool:
+    def _mock_tree(self):
+        return {
+            "folder": {
+                "id": "1",
+                "name": "USER_ROOT",
+                "folder": [
+                    {"id": "2", "name": "Inbox"},
+                    {"id": "5", "name": "Prospects", "folder": {"id": "6", "name": "ACME"}},
+                ],
+                "link": {
+                    "id": "300",
+                    "name": "info_jeci",
+                    "owner": "info@jeci.fr",
+                    "zid": "abc",
+                    "rid": 1,
+                    "folder": {"id": "abc:400", "name": "Dossiers"},
+                },
+            }
+        }
+
+    def _tools(self, email_tools, created=None):
+        tools, client = email_tools
+        client.get_folder = MagicMock(return_value=self._mock_tree())
+        client.create_folder = MagicMock(return_value={"folder": created or {}})
+        return tools, client
+
+    def test_at_root_by_default(self, email_tools):
+        tools, client = self._tools(email_tools, {"id": "900", "name": "Clients", "view": "message"})
+
+        result = tools["create_folder"]("Clients")
+
+        client.get_folder.assert_called_once_with("/", traverse_mountpoints=True)
+        client.create_folder.assert_called_once_with("Clients", "1", color=None)
+        assert result["success"] is True
+        assert result["created"] is True
+        assert result["id"] == "900"
+        assert result["path"] == "USER_ROOT/Clients"
+        assert "shared" not in result
+
+    def test_under_parent_path(self, email_tools):
+        tools, client = self._tools(email_tools, {"id": "901", "name": "Globex"})
+
+        for parent in ("Prospects", "/prospects/", "USER_ROOT/Prospects"):
+            result = tools["create_folder"]("Globex", parent=parent)
+            assert client.create_folder.call_args[0][:2] == ("Globex", "5")
+            assert result["path"] == "USER_ROOT/Prospects/Globex"
+
+    def test_under_parent_id(self, email_tools):
+        tools, client = self._tools(email_tools, {"id": "901", "name": "Globex"})
+
+        result = tools["create_folder"]("Globex", parent="5")
+
+        assert client.create_folder.call_args[0][:2] == ("Globex", "5")
+        assert result["path"] == "USER_ROOT/Prospects/Globex"
+
+    def test_color(self, email_tools):
+        tools, client = self._tools(email_tools, {"id": "900", "name": "Clients"})
+
+        tools["create_folder"]("Clients", color="Green")
+
+        assert client.create_folder.call_args.kwargs["color"] == 3
+
+    def test_invalid_color(self, email_tools):
+        tools, client = self._tools(email_tools)
+
+        result = tools["create_folder"]("Clients", color="mauve")
+
+        assert result["success"] is False
+        client.create_folder.assert_not_called()
+
+    def test_in_shared_mountpoint_uses_owner_mailbox(self, email_tools):
+        tools, client = self._tools(email_tools, {"id": "abc:500", "name": "Archives"})
+
+        for parent in ("info_jeci", "300", "abc:1"):
+            result = tools["create_folder"]("Archives", parent=parent)
+            assert client.create_folder.call_args[0][:2] == ("Archives", "abc:1")
+            assert result["path"] == "USER_ROOT/info_jeci/Archives"
+            assert result["shared"] is True
+            assert result["owner"] == "info@jeci.fr"
+
+    def test_in_shared_subfolder(self, email_tools):
+        tools, client = self._tools(email_tools, {"id": "abc:501", "name": "2026"})
+
+        result = tools["create_folder"]("2026", parent="info_jeci/Dossiers")
+
+        assert client.create_folder.call_args[0][:2] == ("2026", "abc:400")
+        assert result["id"] == "abc:501"
+        assert result["path"] == "USER_ROOT/info_jeci/Dossiers/2026"
+        assert result["owner"] == "info@jeci.fr"
+
+    def test_existing_folder_returned(self, email_tools):
+        tools, client = self._tools(email_tools)
+
+        result = tools["create_folder"]("acme", parent="Prospects")
+
+        client.create_folder.assert_not_called()
+        assert result["success"] is True
+        assert result["created"] is False
+        assert result["id"] == "6"
+        assert result["path"] == "USER_ROOT/Prospects/ACME"
+
+    def test_existing_shared_folder_returned(self, email_tools):
+        tools, client = self._tools(email_tools)
+
+        result = tools["create_folder"]("Dossiers", parent="info_jeci")
+
+        client.create_folder.assert_not_called()
+        assert result["created"] is False
+        assert result["id"] == "abc:400"
+        assert result["owner"] == "info@jeci.fr"
+
+    def test_invalid_name(self, email_tools):
+        tools, client = self._tools(email_tools)
+
+        for name in ("a/b", "  ", ""):
+            result = tools["create_folder"](name)
+            assert result["success"] is False
+        client.get_folder.assert_not_called()
+        client.create_folder.assert_not_called()
+
+    def test_parent_not_found(self, email_tools):
+        tools, client = self._tools(email_tools)
+
+        result = tools["create_folder"]("X", parent="Nope/Nope")
+
+        assert result["success"] is False
+        assert "Nope/Nope" in result["error"]
+        client.create_folder.assert_not_called()
+
+
 class TestSearchEmailsInFolder:
     def _mock_tree(self):
         return {

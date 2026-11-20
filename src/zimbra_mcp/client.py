@@ -249,6 +249,22 @@ class ZimbraClient:
             params["tr"] = 1
         return self.request("GetFolderRequest", "urn:zimbraMail", params)
 
+    def create_folder(self, name: str, parent_id: str, color: int | None = None) -> dict[str, Any]:
+        """Create a mail folder.
+
+        Args:
+            name: Folder name
+            parent_id: Parent folder ID ("<owner zimbraId>:<id>" for a folder of another mailbox)
+            color: Folder color (0-127)
+
+        Returns:
+            The created folder
+        """
+        folder: dict[str, Any] = {"name": name, "l": parent_id, "view": "message"}
+        if color is not None:
+            folder["color"] = color
+        return self.request("CreateFolderRequest", "urn:zimbraMail", {"folder": folder})
+
     def move_messages(self, msg_ids: list[str], folder_id: str) -> dict[str, Any]:
         """Move messages to a folder.
 

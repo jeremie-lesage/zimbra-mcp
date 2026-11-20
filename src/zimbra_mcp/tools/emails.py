@@ -15,6 +15,7 @@ from mcp.server.fastmcp import FastMCP
 
 from zimbra_mcp.client import ZimbraClient
 from zimbra_mcp.config import ZimbraConfig
+from zimbra_mcp.tools.tags import ZIMBRA_COLORS
 
 
 def _convert_iso_dates(query: str) -> str:
@@ -488,6 +489,56 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
             "query": name,
             "total": len(matches),
         }
+
+    @mcp.tool()
+    def create_folder(name: str, parent: str | None = None, color: str | None = None) -> dict[str, Any]:
+        """Create a mail folder, or return it if it already exists.
+
+        Under a shared folder, the folder is created in the owner's mailbox.
+
+        Args:
+            name: Folder name, without "/"
+            parent: Parent folder path ("Prospects", "info_jeci/Dossiers") or ID
+                (default: the top level)
+            color: Folder color (optional): blue, cyan, green, purple, red,
+                yellow, pink, gray, orange
+
+        Returns:
+            The folder (id, name, path, shared/owner as in list_folders) with
+            "created": false when it already existed
+        """
+        name = name.strip()
+        if not name or "/" in name:
+            return {"success": False, "error": f"Invalid folder name: {name!r}"}
+
+        color_id = None
+        if color:
+            color_id = ZIMBRA_COLORS.get(color.lower())
+            if color_id is None:
+                return {
+                    "success": False,
+                    "error": f"Invalid color: {color}. Available colors: {list(ZIMBRA_COLORS.keys())}",
+                }
+
+        tree = client.get_folder("/", traverse_mountpoints=True)
+        found = _resolve_folder(_root_folders(tree), parent)
+        if found is None:
+            return {"success": False, "error": f"Parent folder not found: {parent}"}
+        node, info = found
+        owner = info["owner"] if info.get("shared") else None
+
+        for child in _subfolders(node):
+            if child.get("name", "").lower() != name.lower():
+                continue
+            existing: list[dict] = []
+            _flatten_folders(child, existing, info["path"], owner)
+            return {"success": True, "created": False, **existing[0]}
+
+        result = client.create_folder(name, _folder_target_id(node), color=color_id)
+        folder = result.get("folder", {})
+        created: list[dict] = []
+        _flatten_folders({**folder, "folder": [], "link": []}, created, info["path"], owner)
+        return {"success": True, "created": True, **created[0]}
 
     @mcp.tool()
     def move_emails(msg_ids: list[str], folder_id: str) -> dict[str, Any]:
@@ -967,15 +1018,64 @@ def _find_folder(folder: dict, folder_id: str) -> dict | None:
 
     A mountpoint also matches its remote ID ("<owner zimbraId>:<remote folder id>").
     """
-    ids = {str(folder.get("id"))}
-    if folder.get("zid") and folder.get("rid"):
-        ids.add(f"{folder['zid']}:{folder['rid']}")
-    if folder_id in ids:
+    if folder_id in _folder_ids(folder):
         return folder
     for subfolder in _subfolders(folder):
         found = _find_folder(subfolder, folder_id)
         if found is not None:
             return found
+    return None
+
+
+def _folder_ids(folder: dict) -> set[str]:
+    """Return the IDs of a folder, plus the remote ID of a mountpoint."""
+    ids = {str(folder.get("id"))}
+    if folder.get("zid") and folder.get("rid"):
+        ids.add(_folder_target_id(folder))
+    return ids
+
+
+def _folder_target_id(folder: dict) -> str:
+    """Return the ID to act on a folder, in the owner's mailbox for a mountpoint."""
+    if folder.get("zid") and folder.get("rid"):
+        return f"{folder['zid']}:{folder['rid']}"
+    return str(folder.get("id"))
+
+
+def _walk_folders(folder: dict, path: str = "", shared_owner: str | None = None):
+    """Yield (folder, flattened info) pairs for a folder tree, in list_folders order."""
+    info: list[dict] = []
+    _flatten_folders({**folder, "folder": [], "link": []}, info, path, shared_owner)
+    entry = info[0]
+    yield folder, entry
+    owner = entry["owner"] if entry.get("shared") else None
+    for subfolder in _subfolders(folder):
+        yield from _walk_folders(subfolder, entry["path"], owner)
+
+
+def _resolve_folder(roots: list[dict], parent: str | None) -> tuple[dict, dict] | None:
+    """Find a folder by path (with or without the root name) or by ID.
+
+    An empty parent designates the root folder.
+    """
+    pairs = [pair for root in roots for pair in _walk_folders(root)]
+    if not pairs:
+        return None
+
+    root_path = pairs[0][1]["path"]
+    base = (parent or "").strip().strip("/")
+    if not base:
+        return pairs[0]
+    if base.lower() == root_path.lower() or base.lower().startswith(root_path.lower() + "/"):
+        base = base[len(root_path):].lstrip("/")
+    wanted = f"{root_path}/{base}".lower() if base else root_path.lower()
+
+    for node, info in pairs:
+        if info["path"].lower() == wanted:
+            return node, info
+    for node, info in pairs:
+        if parent.strip() in _folder_ids(node):
+            return node, info
     return None
 
 
