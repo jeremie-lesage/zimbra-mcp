@@ -303,6 +303,24 @@ class ZimbraClient:
         }
         return self.request("MsgActionRequest", "urn:zimbraMail", params)
 
+    def flag_messages(self, msg_ids: list[str], flagged: bool = True) -> dict[str, Any]:
+        """Set or clear the flag on messages.
+
+        Args:
+            msg_ids: List of message IDs
+            flagged: True to flag, False to clear the flag
+
+        Returns:
+            Operation result
+        """
+        params = {
+            "action": {
+                "id": ",".join(msg_ids),
+                "op": "flag" if flagged else "!flag",
+            }
+        }
+        return self.request("MsgActionRequest", "urn:zimbraMail", params)
+
     def delete_messages(self, msg_ids: list[str], hard_delete: bool = False) -> dict[str, Any]:
         """Delete messages.
 

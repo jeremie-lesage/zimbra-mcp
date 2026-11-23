@@ -576,6 +576,25 @@ class TestMarkAsReadTool:
         assert result["status"] == "unread"
 
 
+class TestFlagEmailsTool:
+    def test_flag(self, email_tools):
+        tools, client = email_tools
+        client.flag_messages = MagicMock()
+
+        result = tools["flag_emails"](["1", "2"])
+        client.flag_messages.assert_called_once_with(["1", "2"], flagged=True)
+        assert result["status"] == "flagged"
+        assert result["flagged_count"] == 2
+
+    def test_unflag(self, email_tools):
+        tools, client = email_tools
+        client.flag_messages = MagicMock()
+
+        result = tools["flag_emails"](["1"], flagged=False)
+        client.flag_messages.assert_called_once_with(["1"], flagged=False)
+        assert result["status"] == "unflagged"
+
+
 class TestPrepareBodyWithOriginal:
     def test_no_include(self, connected_client):
         body, attach = _prepare_body_with_original(

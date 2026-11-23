@@ -312,6 +312,24 @@ class TestMarkAsRead:
         assert params["action"]["op"] == "!read"
 
 
+class TestFlagMessages:
+    def test_flag(self, connected_client):
+        resp = _make_ok_response("MsgActionResponse", {"action": {}})
+        _setup_response(connected_client, resp)
+
+        connected_client.flag_messages(["1", "2"])
+        params = _get_request_params(connected_client)
+        assert params["action"] == {"id": "1,2", "op": "flag"}
+
+    def test_unflag(self, connected_client):
+        resp = _make_ok_response("MsgActionResponse", {"action": {}})
+        _setup_response(connected_client, resp)
+
+        connected_client.flag_messages(["1"], flagged=False)
+        params = _get_request_params(connected_client)
+        assert params["action"]["op"] == "!flag"
+
+
 class TestDeleteMessages:
     def test_soft_delete(self, connected_client):
         resp = _make_ok_response("MsgActionResponse", {"action": {}})

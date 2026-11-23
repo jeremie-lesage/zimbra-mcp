@@ -579,6 +579,24 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         }
 
     @mcp.tool()
+    def flag_emails(msg_ids: list[str], flagged: bool = True) -> dict[str, Any]:
+        """Flag emails or remove their flag.
+
+        Args:
+            msg_ids: List of email IDs
+            flagged: True to flag (default), False to remove the flag
+
+        Returns:
+            Operation confirmation
+        """
+        client.flag_messages(msg_ids, flagged=flagged)
+        return {
+            "success": True,
+            "flagged_count": len(msg_ids),
+            "status": "flagged" if flagged else "unflagged",
+        }
+
+    @mcp.tool()
     def delete_emails(msg_ids: list[str], hard_delete: bool = False) -> dict[str, Any]:
         """Delete emails.
 
