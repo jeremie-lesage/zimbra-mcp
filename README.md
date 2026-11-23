@@ -105,6 +105,22 @@ is generated from the HTML.
 - **Update in place:** pass `draft_id` to `create_draft` to replace an existing draft's content
   instead of creating a new one.
 
+#### Signature
+
+Pass `append_signature=True` to `create_draft` or `send_email` to add the account signature the
+way the Zimbra web client does:
+
+- **Which signature:** the default identity's default signature, or its reply/forward signature
+  when `orig_msg_id` is set. An account with a single signature and no default uses it. When the
+  reply/forward setting is "no signature", nothing is added.
+- **Where:** above the quoted original, or below it when the account's signature style is
+  "internet" (`zimbraPrefMailSignatureStyle`).
+- **Format:** an HTML signature is sanitised like quoted originals (`https` images are kept) and
+  turns a plain-text message into HTML; the plain-text part gets the signature after a `-- `
+  delimiter.
+
+The response contains `signature`: the name of the signature added, or `null` when none applies.
+
 #### Reply & Forward Drafts
 
 `create_draft` and `send_email` support linking to an original message for replies and forwards:
@@ -121,6 +137,7 @@ Examples:
 - **Forward as attachment:** `create_draft(to=[...], subject="Fwd: ...", body="...", orig_msg_id="123", reply_type="w", include_original="attachment")`
 - **HTML reply:** `create_draft(to=[...], subject="Re: ...", body_html="<p>Thanks, <b>agreed</b>.</p>", orig_msg_id="123", reply_type="r")`
 - **Revise a draft:** `create_draft(to=[...], subject="Re: ...", body_html="<p>Revised</p>", draft_id="456")`
+- **Signed draft:** `create_draft(to=[...], subject="...", body_html="<p>Hello</p>", append_signature=True)`
 
 #### Zimbra Search Syntax
 
