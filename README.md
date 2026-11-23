@@ -41,6 +41,7 @@ ZIMBRA_ENABLE_SEND=false
 | `ZIMBRA_ENABLE_SEND` | Enable `send_email` tool (`true`/`1`/`yes`) | `false` |
 | `ZIMBRA_ENABLE_HARD_DELETE` | Allow permanent deletion of emails/contacts (`hard_delete=True`) | `false` |
 | `ZIMBRA_ENABLE_FILTERS` | Enable the filter write tools (`add_filter`, `move_filter`, `update_filter`, `delete_filter`, `add_filter_condition`, `remove_filter_condition`) | `false` |
+| `ZIMBRA_APPEND_SIGNATURE` | Add the account signature to drafts and sent mail when the call does not set `append_signature` | `false` |
 | `ZIMBRA_DOWNLOAD_DIR` | When set, the only directory `download_attachment` may write into | (unset) |
 | `ZIMBRA_MAX_ATTACHMENT_MB` | Maximum attachment size downloaded | `50` |
 | `ZIMBRA_ALLOW_INSECURE_HTTP` | Accept a plain `http://` `ZIMBRA_URL` (credentials sent unencrypted) | `false` |
@@ -108,7 +109,8 @@ is generated from the HTML.
 #### Signature
 
 Pass `append_signature=True` to `create_draft` or `send_email` to add the account signature the
-way the Zimbra web client does:
+way the Zimbra web client does. Set `ZIMBRA_APPEND_SIGNATURE=true` to make that the default; a call
+can still pass `append_signature=False`.
 
 - **Which signature:** the default identity's default signature, or its reply/forward signature
   when `orig_msg_id` is set. An account with a single signature and no default uses it. When the

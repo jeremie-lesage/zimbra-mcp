@@ -33,6 +33,17 @@ class TestZimbraConfig:
         assert cfg.timeout == 30
 
     @patch("zimbra_mcp.config.load_dotenv")
+    def test_from_env_append_signature(self, _mock_dotenv, monkeypatch):
+        monkeypatch.setenv("ZIMBRA_URL", "https://z.test/service/soap")
+        monkeypatch.setenv("ZIMBRA_USER", "u@test.com")
+        monkeypatch.setenv("ZIMBRA_PASSWORD", "pw")
+        monkeypatch.delenv("ZIMBRA_APPEND_SIGNATURE", raising=False)
+        assert ZimbraConfig.from_env().append_signature is False
+
+        monkeypatch.setenv("ZIMBRA_APPEND_SIGNATURE", "true")
+        assert ZimbraConfig.from_env().append_signature is True
+
+    @patch("zimbra_mcp.config.load_dotenv")
     def test_from_env_missing_url(self, _mock_dotenv, monkeypatch):
         monkeypatch.delenv("ZIMBRA_URL", raising=False)
         monkeypatch.setenv("ZIMBRA_USER", "u@test.com")

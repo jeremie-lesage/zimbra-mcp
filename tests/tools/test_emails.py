@@ -1093,6 +1093,30 @@ class TestSignatureTools:
         assert html.index("</blockquote>") < html.index("<b>Bob</b>")
         assert args[2].index("> Original plain") < args[2].index("-- \nBob")
 
+    def test_server_default_applies_when_omitted(self, email_tools):
+        tools, client = email_tools
+        client.config.append_signature = True
+        _signature_client(client, {"zimbraPrefDefaultSignatureId": "s2"}, [TEXT_SIGNATURE])
+        client.create_draft = MagicMock(return_value={"m": {"id": "85"}})
+
+        result = tools["create_draft"](to=["b@test.com"], subject="Hi", body="Hello")
+
+        assert client.create_draft.call_args.args[2] == "Hello\n\n-- \nBob\nACME"
+        assert result["signature"] == "Short"
+
+    def test_explicit_false_overrides_server_default(self, email_tools):
+        tools, client = email_tools
+        client.config.append_signature = True
+        client.get_signatures = MagicMock()
+        client.create_draft = MagicMock(return_value={"m": {"id": "86"}})
+
+        result = tools["create_draft"](to=["b@test.com"], subject="Hi", body="Hello",
+                                       append_signature=False)
+
+        client.get_signatures.assert_not_called()
+        assert client.create_draft.call_args.args[2] == "Hello"
+        assert "signature" not in result
+
     def test_send_email_with_signature(self, connected_client):
         cfg = ZimbraConfig(url="https://z.test", user="u", password="p", enable_send=True)
         tools = capture_tools(register_email_tools, connected_client, cfg)

@@ -678,7 +678,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         include_original: str | None = None,
         body_html: str | None = None,
         draft_id: str | None = None,
-        append_signature: bool = False,
+        append_signature: bool | None = None,
     ) -> dict[str, Any]:
         """Create an email draft (without sending it), or update an existing draft.
 
@@ -699,7 +699,8 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
         append_signature=True adds the account signature the way Zimbra does: the
         default signature (or the reply/forward one when replying), above or below
         the quoted original depending on the account's signature style. An HTML
-        signature turns a plain-text message into HTML.
+        signature turns a plain-text message into HTML. When append_signature is
+        omitted, the server default applies (ZIMBRA_APPEND_SIGNATURE).
 
         Args:
             to: List of primary recipients
@@ -712,11 +713,13 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
             include_original: How to include the original message: "inline" (default when replying/forwarding), "attachment", or "none" (optional)
             body_html: Message body as HTML (optional)
             draft_id: ID of an existing draft to replace with this content (optional)
-            append_signature: Add the account signature (default: False)
+            append_signature: Add the account signature (default: ZIMBRA_APPEND_SIGNATURE, false when unset)
 
         Returns:
             Information about the created draft
         """
+        if append_signature is None:
+            append_signature = client.config.append_signature
         signature = _account_signature(client, bool(orig_msg_id)) if append_signature else None
         full_body, full_html, attach_msg_id, include_original = _compose(
             client, body, body_html, orig_msg_id, reply_type, include_original, signature,
@@ -826,7 +829,7 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
             include_original: str | None = None,
             draft_id: str | None = None,
             body_html: str | None = None,
-            append_signature: bool = False,
+            append_signature: bool | None = None,
         ) -> dict[str, Any]:
             """Send an email directly. WARNING: sends immediately, cannot be undone.
 
@@ -850,11 +853,13 @@ def register_email_tools(mcp: FastMCP, client: ZimbraClient, config: ZimbraConfi
                 include_original: How to include the original message: "inline" (default when replying/forwarding), "attachment", or "none" (optional)
                 draft_id: ID of an existing draft to send (optional)
                 body_html: Message body as HTML, sent alongside plain text (optional)
-                append_signature: Add the account signature (default: False)
+                append_signature: Add the account signature (default: ZIMBRA_APPEND_SIGNATURE, false when unset)
 
             Returns:
                 Information about the sent email
             """
+            if append_signature is None:
+                append_signature = client.config.append_signature
             signature = _account_signature(client, bool(orig_msg_id)) if append_signature else None
             full_body, full_html, attach_msg_id, include_original = _compose(
                 client, body, body_html, orig_msg_id, reply_type, include_original, signature,
