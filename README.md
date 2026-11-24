@@ -41,6 +41,7 @@ ZIMBRA_ENABLE_SEND=false
 | `ZIMBRA_ENABLE_SEND` | Enable `send_email` tool (`true`/`1`/`yes`) | `false` |
 | `ZIMBRA_ENABLE_HARD_DELETE` | Allow permanent deletion of emails/contacts (`hard_delete=True`) | `false` |
 | `ZIMBRA_ENABLE_FILTERS` | Enable the filter write tools (`add_filter`, `move_filter`, `update_filter`, `delete_filter`, `add_filter_condition`, `remove_filter_condition`) | `false` |
+| `ZIMBRA_APPEND_SIGNATURE` | Add the account signature to drafts and sent mail when the call does not set `append_signature` | `false` |
 | `ZIMBRA_DOWNLOAD_DIR` | When set, the only directory `download_attachment` may write into | (unset) |
 | `ZIMBRA_MAX_ATTACHMENT_MB` | Maximum attachment size downloaded | `50` |
 | `ZIMBRA_ALLOW_INSECURE_HTTP` | Accept a plain `http://` `ZIMBRA_URL` (credentials sent unencrypted) | `false` |
@@ -106,6 +107,23 @@ is generated from the HTML.
 - **Update in place:** pass `draft_id` to `create_draft` to replace an existing draft's content
   instead of creating a new one.
 
+#### Signature
+
+Pass `append_signature=True` to `create_draft` or `send_email` to add the account signature the
+way the Zimbra web client does. Set `ZIMBRA_APPEND_SIGNATURE=true` to make that the default; a call
+can still pass `append_signature=False`.
+
+- **Which signature:** the default identity's default signature, or its reply/forward signature
+  when `orig_msg_id` is set. An account with a single signature and no default uses it. When the
+  reply/forward setting is "no signature", nothing is added.
+- **Where:** above the quoted original, or below it when the account's signature style is
+  "internet" (`zimbraPrefMailSignatureStyle`).
+- **Format:** an HTML signature is sanitised like quoted originals (`https` images are kept) and
+  turns a plain-text message into HTML; the plain-text part gets the signature after a `-- `
+  delimiter.
+
+The response contains `signature`: the name of the signature added, or `null` when none applies.
+
 #### Reply & Forward Drafts
 
 `create_draft` and `send_email` support linking to an original message for replies and forwards:
@@ -122,6 +140,7 @@ Examples:
 - **Forward as attachment:** `create_draft(to=[...], subject="Fwd: ...", body="...", orig_msg_id="123", reply_type="w", include_original="attachment")`
 - **HTML reply:** `create_draft(to=[...], subject="Re: ...", body_html="<p>Thanks, <b>agreed</b>.</p>", orig_msg_id="123", reply_type="r")`
 - **Revise a draft:** `create_draft(to=[...], subject="Re: ...", body_html="<p>Revised</p>", draft_id="456")`
+- **Signed draft:** `create_draft(to=[...], subject="...", body_html="<p>Hello</p>", append_signature=True)`
 
 #### Zimbra Search Syntax
 

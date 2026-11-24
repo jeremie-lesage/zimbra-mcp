@@ -527,6 +527,60 @@ class TestGetAttachmentContent:
 # --- Tag methods ---
 
 
+class TestGetSignatures:
+    def test_single_html_signature(self, connected_client):
+        resp = _make_ok_response("GetSignaturesResponse", {"signature": {
+            "id": "s1", "name": "Work",
+            "content": {"type": "text/html", "_content": "<p>Bob</p>"},
+        }})
+        _setup_response(connected_client, resp)
+
+        result = connected_client.get_signatures()
+
+        call_args = connected_client._comm.gen_request.return_value.add_request.call_args
+        assert call_args[0][0] == "GetSignaturesRequest"
+        assert call_args[0][2] == "urn:zimbraAccount"
+        assert result == [{"id": "s1", "name": "Work", "html": "<p>Bob</p>", "text": None}]
+
+    def test_both_parts_and_empty_signatures(self, connected_client):
+        resp = _make_ok_response("GetSignaturesResponse", {"signature": [
+            {"id": "s1", "name": "Both", "content": [
+                {"type": "text/plain", "_content": "Bob"},
+                {"type": "text/html", "_content": "<b>Bob</b>"},
+            ]},
+            {"id": "s2", "name": "Empty", "content": [{"type": "text/plain", "_content": ""}]},
+        ]})
+        _setup_response(connected_client, resp)
+
+        result = connected_client.get_signatures()
+
+        assert result == [{"id": "s1", "name": "Both", "html": "<b>Bob</b>", "text": "Bob"}]
+
+    def test_no_signature(self, connected_client):
+        _setup_response(connected_client, _make_ok_response("GetSignaturesResponse", {}))
+        assert connected_client.get_signatures() == []
+
+
+class TestGetDefaultIdentity:
+    def test_picks_default_identity(self, connected_client):
+        resp = _make_ok_response("GetIdentitiesResponse", {"identity": [
+            {"name": "Alias", "id": "i2", "_attrs": {"zimbraPrefDefaultSignatureId": "s2"}},
+            {"name": "DEFAULT", "id": "i1", "_attrs": {"zimbraPrefDefaultSignatureId": "s1"}},
+        ]})
+        _setup_response(connected_client, resp)
+
+        result = connected_client.get_default_identity()
+
+        call_args = connected_client._comm.gen_request.return_value.add_request.call_args
+        assert call_args[0][0] == "GetIdentitiesRequest"
+        assert call_args[0][2] == "urn:zimbraAccount"
+        assert result == {"zimbraPrefDefaultSignatureId": "s1"}
+
+    def test_no_identity(self, connected_client):
+        _setup_response(connected_client, _make_ok_response("GetIdentitiesResponse", {}))
+        assert connected_client.get_default_identity() == {}
+
+
 class TestGetAllTags:
     def test_call(self, connected_client):
         resp = _make_ok_response("GetTagResponse", {"tag": []})

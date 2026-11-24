@@ -448,6 +448,48 @@ class ZimbraClient:
             params["m"]["did"] = draft_id
         return self.request("SendMsgRequest", "urn:zimbraMail", params)
 
+    def get_signatures(self) -> list[dict[str, str | None]]:
+        """Retrieve the account signatures.
+
+        Returns:
+            One dict per signature with id, name, html and text (None when the
+            signature has no part of that type)
+        """
+        result = self.request("GetSignaturesRequest", "urn:zimbraAccount")
+        signatures = result.get("signature", [])
+        if not isinstance(signatures, list):
+            signatures = [signatures]
+
+        parsed = []
+        for signature in signatures:
+            contents = signature.get("content", [])
+            if not isinstance(contents, list):
+                contents = [contents]
+            parts = {
+                c.get("type", "text/plain"): c.get("_content", "")
+                for c in contents if isinstance(c, dict)
+            }
+            if not parts.get("text/html") and not parts.get("text/plain"):
+                continue
+            parsed.append({
+                "id": signature.get("id", ""),
+                "name": signature.get("name", ""),
+                "html": parts.get("text/html") or None,
+                "text": parts.get("text/plain") or None,
+            })
+        return parsed
+
+    def get_default_identity(self) -> dict[str, Any]:
+        """Retrieve the attributes of the account's default identity."""
+        result = self.request("GetIdentitiesRequest", "urn:zimbraAccount")
+        identities = result.get("identity", [])
+        if not isinstance(identities, list):
+            identities = [identities]
+        if not identities:
+            return {}
+        identity = next((i for i in identities if i.get("name") == "DEFAULT"), identities[0])
+        return identity.get("_attrs") or {}
+
     def get_all_tags(self) -> dict[str, Any]:
         """Retrieve all tags."""
         return self.request("GetTagRequest", "urn:zimbraMail")

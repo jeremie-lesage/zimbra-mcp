@@ -11,6 +11,8 @@ from zimbra_mcp.tools.emails import (
     _convert_iso_dates,
     _extract_address,
     _extract_addresses,
+    _account_signature,
+    _append_signature,
     _extract_parts,
     _flatten_folders,
     _format_date,
@@ -958,3 +960,192 @@ class TestHtmlToTextStructure:
         out = _html_to_text("<table><tr><td>Plan</td><td>Seats</td></tr><tr><td>SM</td><td>250</td></tr></table>")
         lines = [l.strip() for l in out.splitlines() if l.strip()]
         assert lines == ["Plan Seats", "SM 250"]
+
+
+HTML_SIGNATURE = {"id": "s1", "name": "Work", "html": "<p><b>Bob</b> - ACME</p>", "text": None}
+TEXT_SIGNATURE = {"id": "s2", "name": "Short", "html": None, "text": "Bob\nACME"}
+
+
+def _signature_client(client, identity, signatures):
+    client.get_default_identity = MagicMock(return_value=identity)
+    client.get_signatures = MagicMock(return_value=signatures)
+    return client
+
+
+class TestAccountSignature:
+    def test_default_signature(self, connected_client):
+        client = _signature_client(connected_client, {"zimbraPrefDefaultSignatureId": "s2"},
+                                   [HTML_SIGNATURE, TEXT_SIGNATURE])
+        signature = _account_signature(client, reply=False)
+        assert signature["name"] == "Short"
+        assert signature["below_quote"] is False
+
+    def test_reply_signature_preferred_when_replying(self, connected_client):
+        identity = {"zimbraPrefDefaultSignatureId": "s1", "zimbraPrefForwardReplySignatureId": "s2"}
+        client = _signature_client(connected_client, identity, [HTML_SIGNATURE, TEXT_SIGNATURE])
+        assert _account_signature(client, reply=True)["name"] == "Short"
+        assert _account_signature(client, reply=False)["name"] == "Work"
+
+    def test_reply_falls_back_to_default(self, connected_client):
+        client = _signature_client(connected_client, {"zimbraPrefDefaultSignatureId": "s1"},
+                                   [HTML_SIGNATURE, TEXT_SIGNATURE])
+        assert _account_signature(client, reply=True)["name"] == "Work"
+
+    def test_reply_without_signature(self, connected_client):
+        identity = {
+            "zimbraPrefDefaultSignatureId": "s1",
+            "zimbraPrefForwardReplySignatureId": "11111111-1111-1111-1111-111111111111",
+        }
+        client = _signature_client(connected_client, identity, [HTML_SIGNATURE])
+        assert _account_signature(client, reply=True) is None
+
+    def test_single_signature_without_default(self, connected_client):
+        client = _signature_client(connected_client, {}, [HTML_SIGNATURE])
+        assert _account_signature(client, reply=False)["name"] == "Work"
+
+    def test_several_signatures_without_default(self, connected_client):
+        client = _signature_client(connected_client, {}, [HTML_SIGNATURE, TEXT_SIGNATURE])
+        assert _account_signature(client, reply=False) is None
+
+    def test_unknown_default_id(self, connected_client):
+        client = _signature_client(connected_client, {"zimbraPrefDefaultSignatureId": "gone"},
+                                   [HTML_SIGNATURE])
+        assert _account_signature(client, reply=False) is None
+
+    def test_internet_style_goes_below_quote(self, connected_client):
+        identity = {"zimbraPrefDefaultSignatureId": "s1", "zimbraPrefMailSignatureStyle": "internet"}
+        client = _signature_client(connected_client, identity, [HTML_SIGNATURE])
+        assert _account_signature(client, reply=False)["below_quote"] is True
+
+
+class TestAppendSignature:
+    def test_plain_body_plain_signature(self):
+        body, html = _append_signature("Hello", None, TEXT_SIGNATURE)
+        assert body == "Hello\n\n-- \nBob\nACME"
+        assert html is None
+
+    def test_plain_body_html_signature_becomes_html(self):
+        body, html = _append_signature("Hi <you>\nthere", None, HTML_SIGNATURE)
+        assert body.endswith("-- \nBob - ACME")
+        assert html.startswith("Hi &lt;you&gt;<br>there")
+        assert "<b>Bob</b>" in html
+
+    def test_html_body_plain_signature(self):
+        body, html = _append_signature("Hello", "<p>Hello</p>", TEXT_SIGNATURE)
+        assert html.startswith("<p>Hello</p>")
+        assert "Bob<br>ACME" in html
+
+    def test_signature_html_is_sanitised(self):
+        signature = {**HTML_SIGNATURE, "html": (
+            '<p>Bob</p><script>bad()</script><img src="https://x.test/logo.png"><img src="cid:a">'
+        )}
+        _, html = _append_signature("Hi", None, signature)
+        assert "script" not in html and "cid:" not in html
+        assert 'src="https://x.test/logo.png"' in html
+
+    def test_empty_body(self):
+        body, _ = _append_signature("", None, TEXT_SIGNATURE)
+        assert body == "-- \nBob\nACME"
+
+
+class TestSignatureTools:
+    def test_not_fetched_by_default(self, email_tools):
+        tools, client = email_tools
+        client.get_signatures = MagicMock()
+        client.create_draft = MagicMock(return_value={"m": {"id": "80"}})
+        result = tools["create_draft"](to=["b@test.com"], subject="Hi", body="Hello")
+        client.get_signatures.assert_not_called()
+        assert "signature" not in result
+
+    def test_draft_with_signature(self, email_tools):
+        tools, client = email_tools
+        _signature_client(client, {"zimbraPrefDefaultSignatureId": "s1"}, [HTML_SIGNATURE])
+        client.create_draft = MagicMock(return_value={"m": {"id": "81"}})
+
+        result = tools["create_draft"](to=["b@test.com"], subject="Hi",
+                                       body_html="<p>Hello</p>", append_signature=True)
+
+        args, kwargs = client.create_draft.call_args
+        assert kwargs["body_html"].startswith("<p>Hello</p>")
+        assert "<b>Bob</b>" in kwargs["body_html"]
+        assert args[2].endswith("-- \nBob - ACME")
+        assert result["signature"] == "Work"
+        assert result["format"] == "html"
+
+    def test_no_signature_available(self, email_tools):
+        tools, client = email_tools
+        _signature_client(client, {}, [])
+        client.create_draft = MagicMock(return_value={"m": {"id": "82"}})
+        result = tools["create_draft"](to=["b@test.com"], subject="Hi", body="Hello",
+                                       append_signature=True)
+        assert client.create_draft.call_args.args[2] == "Hello"
+        assert result["signature"] is None
+
+    def test_reply_signature_above_quote(self, email_tools):
+        tools, client = email_tools
+        _signature_client(client, {"zimbraPrefDefaultSignatureId": "s1"}, [HTML_SIGNATURE])
+        client.get_message = MagicMock(return_value=HTML_ORIGINAL)
+        client.create_draft = MagicMock(return_value={"m": {"id": "83"}})
+
+        tools["create_draft"](to=["jonathan@customer.test"], subject="RE: Supplier pricing",
+                              body_html="<p>Thanks</p>", orig_msg_id="9", reply_type="r",
+                              append_signature=True)
+
+        args, kwargs = client.create_draft.call_args
+        html = kwargs["body_html"]
+        assert html.index("Thanks") < html.index("<b>Bob</b>") < html.index("<blockquote")
+        assert args[2].index("-- \nBob") < args[2].index("> Original plain")
+
+    def test_reply_signature_below_quote(self, email_tools):
+        tools, client = email_tools
+        identity = {"zimbraPrefDefaultSignatureId": "s1", "zimbraPrefMailSignatureStyle": "internet"}
+        _signature_client(client, identity, [HTML_SIGNATURE])
+        client.get_message = MagicMock(return_value=HTML_ORIGINAL)
+        client.create_draft = MagicMock(return_value={"m": {"id": "84"}})
+
+        tools["create_draft"](to=["jonathan@customer.test"], subject="RE: Supplier pricing",
+                              body_html="<p>Thanks</p>", orig_msg_id="9", reply_type="r",
+                              append_signature=True)
+
+        args, kwargs = client.create_draft.call_args
+        html = kwargs["body_html"]
+        assert html.index("</blockquote>") < html.index("<b>Bob</b>")
+        assert args[2].index("> Original plain") < args[2].index("-- \nBob")
+
+    def test_server_default_applies_when_omitted(self, email_tools):
+        tools, client = email_tools
+        client.config.append_signature = True
+        _signature_client(client, {"zimbraPrefDefaultSignatureId": "s2"}, [TEXT_SIGNATURE])
+        client.create_draft = MagicMock(return_value={"m": {"id": "85"}})
+
+        result = tools["create_draft"](to=["b@test.com"], subject="Hi", body="Hello")
+
+        assert client.create_draft.call_args.args[2] == "Hello\n\n-- \nBob\nACME"
+        assert result["signature"] == "Short"
+
+    def test_explicit_false_overrides_server_default(self, email_tools):
+        tools, client = email_tools
+        client.config.append_signature = True
+        client.get_signatures = MagicMock()
+        client.create_draft = MagicMock(return_value={"m": {"id": "86"}})
+
+        result = tools["create_draft"](to=["b@test.com"], subject="Hi", body="Hello",
+                                       append_signature=False)
+
+        client.get_signatures.assert_not_called()
+        assert client.create_draft.call_args.args[2] == "Hello"
+        assert "signature" not in result
+
+    def test_send_email_with_signature(self, connected_client):
+        cfg = ZimbraConfig(url="https://z.test", user="u", password="p", enable_send=True)
+        tools = capture_tools(register_email_tools, connected_client, cfg)
+        _signature_client(connected_client, {"zimbraPrefDefaultSignatureId": "s2"}, [TEXT_SIGNATURE])
+        connected_client.send_message = MagicMock(return_value={"m": {"id": "202"}})
+
+        result = tools["send_email"](to=["bob@test.com"], subject="Test", body="Hello",
+                                     append_signature=True)
+
+        args, kwargs = connected_client.send_message.call_args
+        assert args[2] == "Hello\n\n-- \nBob\nACME"
+        assert kwargs["body_html"] is None
+        assert result["signature"] == "Short"
